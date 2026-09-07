@@ -22,9 +22,10 @@ FROM base AS runtime
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 COPY docker/entrypoint.sh ./docker/entrypoint.sh
 RUN chmod +x ./docker/entrypoint.sh
-# alembic/ and alembic.ini are added to this COPY list in step 2.
 
 EXPOSE 8000
 ENTRYPOINT ["./docker/entrypoint.sh"]

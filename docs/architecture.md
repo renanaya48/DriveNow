@@ -44,6 +44,42 @@ flowchart TD
 | Cross-cutting | `app/core/` | Settings, logging, metrics, DB session factory, DI providers | Domain rules |
 | Messaging | `app/messaging/` | Publish/consume domain events | Be a hard dependency of the request path (best-effort) |
 
+<a id="schema"></a>
+
+### 2.1 Database schema
+
+Managed by Alembic (`alembic/versions/0001_create_cars_and_rentals.py`). Models in
+`app/models/`. `CarStatus` is stored as `VARCHAR` + `CHECK` (`native_enum=False`)
+so the same models run on PostgreSQL and on SQLite (tests).
+
+```
+cars
+  id           INTEGER  PK
+  model        VARCHAR(100)   NOT NULL
+  year         INTEGER        NOT NULL
+  status       VARCHAR(20)    NOT NULL  DEFAULT 'available'
+                 CHECK status IN ('available','in_use','under_maintenance')
+  created_at   TIMESTAMPTZ    NOT NULL  DEFAULT now()
+  updated_at   TIMESTAMPTZ    NOT NULL  DEFAULT now()
+
+rentals
+  id             INTEGER  PK
+  car_id         INTEGER        NOT NULL  -> cars(id)        [index ix_rentals_car_id]
+  customer_name  VARCHAR(200)   NOT NULL
+  start_date     DATE           NOT NULL   -- agreed term, set at registration
+  end_date       DATE           NOT NULL   -- agreed term, set at registration
+  returned_at    DATE           NULL       -- set when the rental is ended;
+                                           -- NULL => still active
+                                           [index ix_rentals_returned_at]
+  created_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
+  updated_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
+  CHECK end_date >= start_date            (ck_rentals_end_after_start)
+```
+
+**Active rental** = row with `returned_at IS NULL`. Keeping `returned_at` separate
+from the agreed `end_date` lets us later detect late returns
+(`returned_at > end_date`).
+
 ## 3. Key flows
 
 ### 3.1 Register a rental — `POST /rentals`
@@ -69,7 +105,7 @@ sequenceDiagram
         S-->>API: CarNotAvailableError
         API-->>C: 409
     else ok
-        S->>RR: add(rental)
+        S->>RR: add(rental)  %% start_date, end_date from request; returned_at = NULL
         S->>CR: car.status = in_use
         S->>DB: COMMIT (single transaction)
         S->>P: publish("rental.started", {...})  %% best-effort, after commit
@@ -95,11 +131,11 @@ sequenceDiagram
     alt rental missing
         S-->>API: RentalNotFoundError
         API-->>C: 404
-    else rental.end_date is not null
+    else rental.returned_at is not null
         S-->>API: RentalAlreadyEndedError
         API-->>C: 409
     else ok
-        S->>RR: rental.end_date = now()
+        S->>RR: rental.returned_at = today()
         S->>RR: rental.car.status = available
         S->>DB: COMMIT
         S->>P: publish("rental.ended", {...})
@@ -125,8 +161,8 @@ sequenceDiagram
 - **Transactional integrity matters**: registering a rental must create the rental
   row *and* flip the car's status atomically. A relational DB with ACID
   transactions gives this for free.
-- **Constraints as guardrails**: FK constraints, `NOT NULL`, and an enum-backed
-  `status` column stop invalid data at the DB level.
+- **Constraints as guardrails**: FK constraints, `NOT NULL`, a `CHECK` on
+  `status`, and `CHECK (end_date >= start_date)` stop invalid data at the DB level.
 - SQLAlchemy 2.0 + Alembic give a clean ORM boundary and versioned migrations,
   so swapping the concrete engine later is a config change, not a rewrite.
 

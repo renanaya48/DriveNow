@@ -7,10 +7,12 @@ layer (>= 4 of them) are added in step 10.
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.orm import configure_mappers
 
 from app.main import create_app
 from app.messaging.publisher import EventPublisher, NullPublisher
-from app.models import CarStatus
+from app.models import Base, CarStatus
 
 
 def test_health_endpoint_ok() -> None:
@@ -35,3 +37,12 @@ def test_null_publisher_satisfies_protocol() -> None:
 
 def test_car_status_values() -> None:
     assert {s.value for s in CarStatus} == {"available", "in_use", "under_maintenance"}
+
+
+def test_models_build_schema() -> None:
+    """Models import, relationships resolve, and both tables are created."""
+    configure_mappers()  # forces Car<->Rental relationship resolution
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    tables = set(inspect(engine).get_table_names())
+    assert {"cars", "rentals"} <= tables

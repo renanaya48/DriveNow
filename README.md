@@ -70,9 +70,9 @@ poetry run uvicorn app.main:app --reload --port 8000
 - Health: http://localhost:8000/health
 - Metrics: http://localhost:8000/metrics
 
-> Local runs need a reachable PostgreSQL (see `DATABASE_URL`). Easiest is
-> `docker compose up -d db`. In the skeleton no code touches the DB yet, so the
-> app also boots without one.
+> For a real DB, start one with `docker compose up -d db`, then
+> `poetry run alembic upgrade head`. No request path queries the DB yet (no
+> endpoints until step 6), so the app still boots without one.
 
 ### Docker
 
@@ -81,7 +81,24 @@ docker compose up --build
 ```
 
 Starts `db` (PostgreSQL), `rabbitmq` (with management UI on :15672), `api` on
-:8000, and the `consumer` worker.
+:8000, and the `consumer` worker. The `api` container runs `alembic upgrade head`
+on start (see `docker/entrypoint.sh`) before Uvicorn.
+
+## Database & migrations
+
+Schema is managed with **Alembic**. The DB URL comes from `DATABASE_URL`
+(`app/core/config.py`); `alembic/env.py` reads it, so there is one source of truth.
+
+```bash
+poetry run alembic upgrade head            # apply all migrations
+poetry run alembic downgrade base          # revert everything
+poetry run alembic revision --autogenerate -m "describe change"   # new migration
+poetry run alembic current                 # show applied revision
+```
+
+Tables: `cars`, `rentals` (see [docs/architecture.md](docs/architecture.md#schema)).
+Models live in `app/models/`; a DB session is obtained via the `get_db` FastAPI
+dependency (`app/core/db.py`).
 
 ## Tests
 
@@ -101,7 +118,7 @@ poetry run mypy app
 | # | Step |
 |---|---|
 | 0–1 | Architecture + project skeleton *(done)* |
-| 2 | DB models, session, Alembic migration |
+| 2 | DB models, session, Alembic migration *(done)* |
 | 3 | Repository layer |
 | 4 | Pydantic DTOs |
 | 5 | Service layer (car + rental lifecycle) |
