@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: drivenow
+      POSTGRES_PASSWORD: drivenow
+      POSTGRES_DB: drivenow
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drivenow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql+psycopg://drivenow:drivenow@db:5432/drivenow
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      ENABLE_MESSAGE_QUEUE: "true"
+      LOG_LEVEL: INFO
+      LOG_FILE: logs/app.log
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+
+  consumer:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      APP_ENV: docker
+      DATABASE_URL: postgresql+psycopg://drivenow:drivenow@db:5432/drivenow
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      ENABLE_MESSAGE_QUEUE: "true"
+      LOG_LEVEL: INFO
+    command: ["python", "-m", "app.messaging.consumer"]
+
+volumes:
+  db_data:
