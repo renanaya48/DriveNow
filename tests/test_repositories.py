@@ -5,7 +5,7 @@ Run against in-memory SQLite via the ``db_session`` fixture; no DB daemon needed
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import date
 
 from sqlalchemy.orm import Session
 
@@ -17,8 +17,8 @@ from app.repositories import (
     SqlAlchemyRentalRepository,
 )
 
-_START = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
-_END = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
+_START = date(2026, 1, 1)
+_END = date(2026, 1, 5)
 
 
 def _add_car(session: Session, **kwargs: object) -> Car:
@@ -106,7 +106,7 @@ def test_soft_deleted_car_still_reachable_via_rental_history(db_session: Session
     rentals = SqlAlchemyRentalRepository(db_session)
     car = repo.add(Car(model="Retired", year=2012))
     rental = rentals.add(
-        Rental(car_id=car.id, customer_name="Past", start_at=_START, end_at=_END)
+        Rental(car_id=car.id, customer_name="Past", start_date=_START, end_date=_END)
     )
 
     repo.soft_delete(car)
@@ -129,7 +129,7 @@ def test_rental_add_and_get_by_id(db_session: Session) -> None:
     repo = SqlAlchemyRentalRepository(db_session)
 
     rental = repo.add(
-        Rental(car_id=car.id, customer_name="Dana", start_at=_START, end_at=_END)
+        Rental(car_id=car.id, customer_name="Dana", start_date=_START, end_date=_END)
     )
     assert rental.id is not None
     assert repo.get_by_id(rental.id) is rental
@@ -141,14 +141,14 @@ def test_rental_get_active_by_car_ignores_returned(db_session: Session) -> None:
     repo = SqlAlchemyRentalRepository(db_session)
 
     closed = repo.add(
-        Rental(car_id=car.id, customer_name="Old", start_at=_START, end_at=_END)
+        Rental(car_id=car.id, customer_name="Old", start_date=_START, end_date=_END)
     )
-    closed.returned_at = _END
+    closed.returned_date = _END
     db_session.flush()
     assert repo.get_active_by_car(car.id) is None
 
     active = repo.add(
-        Rental(car_id=car.id, customer_name="New", start_at=_START, end_at=_END)
+        Rental(car_id=car.id, customer_name="New", start_date=_START, end_date=_END)
     )
     assert repo.get_active_by_car(car.id) is active
 
@@ -159,12 +159,12 @@ def test_rental_list_active_excludes_returned(db_session: Session) -> None:
     repo = SqlAlchemyRentalRepository(db_session)
 
     open_rental = repo.add(
-        Rental(car_id=car_a.id, customer_name="Open", start_at=_START, end_at=_END)
+        Rental(car_id=car_a.id, customer_name="Open", start_date=_START, end_date=_END)
     )
     returned = repo.add(
-        Rental(car_id=car_b.id, customer_name="Done", start_at=_START, end_at=_END)
+        Rental(car_id=car_b.id, customer_name="Done", start_date=_START, end_date=_END)
     )
-    returned.returned_at = _END
+    returned.returned_date = _END
     db_session.flush()
 
     assert [r.id for r in repo.list_active()] == [open_rental.id]

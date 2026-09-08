@@ -3,8 +3,8 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** early build (steps 0–3 of 13). Architecture is designed, the project
-> boots, and the database + repository layers are in place; business logic,
+> **Status:** early build (steps 0–4 of 13). Architecture is designed, the project
+> boots, and the database, repository and DTO layers are in place; business logic,
 > endpoints, metrics and the message queue are added in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
@@ -124,7 +124,7 @@ poetry run mypy app
 | 0–1 | Architecture + project skeleton *(done)* |
 | 2 | DB models, session, Alembic migration *(done)* |
 | 3 | Repository layer *(done)* |
-| 4 | Pydantic DTOs |
+| 4 | Pydantic DTOs *(done)* |
 | 5 | Service layer (car + rental lifecycle) |
 | 6 | REST endpoints |
 | 7 | Logging of critical actions |

@@ -6,7 +6,7 @@ Business-logic tests for the service layer come in step 10.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
@@ -15,19 +15,19 @@ from sqlalchemy.orm import Session
 
 from app.models import Base, Car, CarStatus, Rental
 
-_START = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
-_END = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
+_START = date(2026, 1, 1)
+_END = date(2026, 1, 5)
 
 
 def test_car_status_values() -> None:
     assert {s.value for s in CarStatus} == {"available", "in_use", "under_maintenance"}
 
 
-def test_is_active_reflects_returned_at() -> None:
-    rental = Rental(car_id=1, customer_name="Dana", start_at=_START, end_at=_END)
+def test_is_active_reflects_returned_date() -> None:
+    rental = Rental(car_id=1, customer_name="Dana", start_date=_START, end_date=_END)
     assert rental.is_active is True
 
-    rental.returned_at = datetime(2026, 1, 4, 12, 0, tzinfo=UTC)
+    rental.returned_date = date(2026, 1, 4)
     assert rental.is_active is False
 
 
@@ -41,7 +41,7 @@ def test_is_deleted_reflects_deleted_at() -> None:
 
 def test_car_rental_relationship_both_directions(db_session: Session) -> None:
     car = Car(model="VW Golf", year=2021)
-    rental = Rental(car=car, customer_name="Yossi", start_at=_START, end_at=_END)
+    rental = Rental(car=car, customer_name="Yossi", start_date=_START, end_date=_END)
     db_session.add(rental)
     db_session.commit()
 
@@ -90,8 +90,8 @@ def test_check_constraint_rejects_end_before_start(db_session: Session) -> None:
         Rental(
             car_id=car.id,
             customer_name="Rita",
-            start_at=_END,
-            end_at=_START,  # ends before it starts
+            start_date=_END,
+            end_date=_START,  # ends before it starts
         )
     )
     with pytest.raises(IntegrityError):
@@ -103,8 +103,8 @@ def test_foreign_key_is_enforced(db_session: Session) -> None:
         Rental(
             car_id=9999,  # no such car
             customer_name="Nobody",
-            start_at=_START,
-            end_at=_END,
+            start_date=_START,
+            end_date=_END,
         )
     )
     with pytest.raises(IntegrityError):
@@ -135,6 +135,16 @@ def test_migration_head_matches_model_metadata(tmp_path: object) -> None:
         assert {c["name"] for c in migrated.get_check_constraints(table)} == {
             c["name"] for c in modelled.get_check_constraints(table)
         }, f"CHECK constraint drift in {table!r}"
+        assert {i["name"] for i in migrated.get_indexes(table)} == {
+            i["name"] for i in modelled.get_indexes(table)
+        }, f"index drift in {table!r}"
+        assert {
+            (tuple(fk["constrained_columns"]), fk["referred_table"])
+            for fk in migrated.get_foreign_keys(table)
+        } == {
+            (tuple(fk["constrained_columns"]), fk["referred_table"])
+            for fk in modelled.get_foreign_keys(table)
+        }, f"foreign-key drift in {table!r}"
 
 
 def test_invalid_status_rejected_by_db_check(db_session: Session) -> None:

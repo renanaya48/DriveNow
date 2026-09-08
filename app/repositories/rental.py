@@ -44,10 +44,10 @@ class SqlAlchemyRentalRepository:
         return self._session.get(Rental, rental_id)
 
     def get_active_by_car(self, car_id: int) -> Rental | None:
-        """The open rental for a car (``returned_at IS NULL``), if any."""
+        """The open rental for a car (``returned_date IS NULL``), if any."""
         stmt = (
             select(Rental)
-            .where(Rental.car_id == car_id, Rental.returned_at.is_(None))
+            .where(Rental.car_id == car_id, Rental.returned_date.is_(None))
             .order_by(Rental.id.desc())
         )
         return self._session.scalars(stmt).first()
@@ -55,7 +55,7 @@ class SqlAlchemyRentalRepository:
     def list_active(self) -> Sequence[Rental]:
         stmt = (
             select(Rental)
-            .where(Rental.returned_at.is_(None))
+            .where(Rental.returned_date.is_(None))
             .order_by(Rental.id)
         )
         return self._session.scalars(stmt).all()

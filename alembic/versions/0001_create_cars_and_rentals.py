@@ -62,9 +62,9 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True, nullable=False),
         sa.Column("car_id", sa.Integer(), nullable=False),
         sa.Column("customer_name", sa.String(length=200), nullable=False),
-        sa.Column("start_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("end_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("returned_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("start_date", sa.Date(), nullable=False),
+        sa.Column("end_date", sa.Date(), nullable=False),
+        sa.Column("returned_date", sa.Date(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -79,15 +79,15 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["car_id"], ["cars.id"], name="fk_rentals_car_id"),
         sa.CheckConstraint(
-            "end_at >= start_at", name="ck_rentals_end_after_start"
+            "end_date >= start_date", name="ck_rentals_end_after_start"
         ),
     )
     op.create_index("ix_rentals_car_id", "rentals", ["car_id"])
-    op.create_index("ix_rentals_returned_at", "rentals", ["returned_at"])
+    op.create_index("ix_rentals_returned_date", "rentals", ["returned_date"])
 
 
 def downgrade() -> None:
-    op.drop_index("ix_rentals_returned_at", table_name="rentals")
+    op.drop_index("ix_rentals_returned_date", table_name="rentals")
     op.drop_index("ix_rentals_car_id", table_name="rentals")
     op.drop_table("rentals")
     op.drop_index("ix_cars_deleted_at", table_name="cars")

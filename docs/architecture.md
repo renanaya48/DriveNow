@@ -69,19 +69,19 @@ rentals
   id             INTEGER  PK
   car_id         INTEGER        NOT NULL  -> cars(id)        [index ix_rentals_car_id]
   customer_name  VARCHAR(200)   NOT NULL
-  start_at       TIMESTAMPTZ    NOT NULL   -- agreed term (date + time), set at registration
-  end_at         TIMESTAMPTZ    NOT NULL   -- agreed term (date + time), set at registration
-  returned_at    TIMESTAMPTZ    NULL       -- set when the rental is ended;
+  start_date     DATE           NOT NULL   -- agreed term, set at registration
+  end_date       DATE           NOT NULL   -- agreed term, set at registration
+  returned_date  DATE           NULL       -- set when the rental is ended;
                                            -- NULL => still active
-                                           [index ix_rentals_returned_at]
+                                           [index ix_rentals_returned_date]
   created_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
   updated_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
-  CHECK end_at >= start_at                (ck_rentals_end_after_start)
+  CHECK end_date >= start_date            (ck_rentals_end_after_start)
 ```
 
-**Active rental** = row with `returned_at IS NULL`. Keeping `returned_at` separate
-from the agreed `end_at` lets us later detect late returns
-(`returned_at > end_at`).
+**Active rental** = row with `returned_date IS NULL`. Keeping `returned_date`
+separate from the agreed `end_date` lets us later detect late returns
+(`returned_date > end_date`).
 
 **Car removal is a soft delete.** `deleted_at` is stamped instead of deleting the
 row, so rental history is never lost and a retired car stays reachable through
@@ -110,6 +110,39 @@ Rules:
   stamps `deleted_at`; whether a car *may* be removed (e.g. not while it has an
   active rental) is a business rule enforced by the service in step 5.
 
+### 2.3 API schemas (DTOs)
+
+`app/schemas/` — Pydantic v2 models, one triad per aggregate:
+
+- **`*Create`** — required fields only, no `id` / timestamps. `CarCreate` is
+  `model` + `year`; `status` is *not* accepted (a new car is always
+  `AVAILABLE` — `IN_USE` only results from registering a rental).
+- **`*Update`** — every field optional (PATCH). Empty body `{}` is a valid
+  no-op. A field sent explicitly as `null` is rejected (those columns are
+  `NOT NULL`); "not sent" ≠ "sent as null".
+- **`*Read`** — the shape returned to clients: `id`, timestamps, and computed
+  fields (`RentalRead.is_active`, from the ORM property — never stored twice).
+  `CarRead` omits `deleted_at` (deleted cars are not returned at all).
+
+Why DTOs are separate from the ORM models: the ORM describes *storage*; the DTO
+describes *what a client may send and what we choose to show*. The split gives
+over-posting protection, edge validation, and a wire format that stays stable
+when the tables change.
+
+Request DTOs subclass `StrictModel` (`extra="forbid"`) — an unknown / over-posted
+field is a `422`, not silently dropped. Response DTOs subclass `ORMModel`
+(`from_attributes=True`) so they build straight from an ORM instance.
+
+**Three layers of validation:**
+
+| Layer | Question it answers | Examples |
+|---|---|---|
+| Pydantic (DTO) | Is the request *structurally* valid? | types, `year` in range, non-empty name, `end_date >= start_date`, no unknown fields |
+| Service (step 5) | Is the *operation* allowed? | car exists / not soft-deleted / is `AVAILABLE`; rental not already ended; legal status transition |
+| Database | Can invalid persisted state still be prevented? | `NOT NULL`, FK, `CHECK` |
+
+The service does not skip validation — it owns the business invariants.
+
 ## 3. Key flows
 
 ### 3.1 Register a rental — `POST /rentals`
@@ -124,7 +157,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant P as EventPublisher
 
-    C->>API: POST /rentals {car_id, customer_name, start_at, end_at}
+    C->>API: POST /rentals {car_id, customer_name, start_date, end_date}
     API->>S: register_rental(dto)
     S->>CR: get_by_id(car_id)
     CR->>DB: SELECT car
@@ -135,7 +168,7 @@ sequenceDiagram
         S-->>API: CarNotAvailableError
         API-->>C: 409
     else ok
-        S->>RR: add(rental)  %% start_at, end_at from request; returned_at = NULL
+        S->>RR: add(rental)  %% start_date, end_date from request; returned_date = NULL
         S->>CR: car.status = in_use
         S->>DB: COMMIT (single transaction)
         S->>P: publish("rental.started", {...})  %% best-effort, after commit
@@ -161,11 +194,11 @@ sequenceDiagram
     alt rental missing
         S-->>API: RentalNotFoundError
         API-->>C: 404
-    else rental.returned_at is not null
+    else rental.returned_date is not null
         S-->>API: RentalAlreadyEndedError
         API-->>C: 409
     else ok
-        S->>RR: rental.returned_at = now()
+        S->>RR: rental.returned_date = today()
         S->>RR: rental.car.status = available
         S->>DB: COMMIT
         S->>P: publish("rental.ended", {...})
@@ -192,7 +225,7 @@ sequenceDiagram
   row *and* flip the car's status atomically. A relational DB with ACID
   transactions gives this for free.
 - **Constraints as guardrails**: FK constraints, `NOT NULL`, a `CHECK` on
-  `status`, and `CHECK (end_at >= start_at)` stop invalid data at the DB level.
+  `status`, and `CHECK (end_date >= start_date)` stop invalid data at the DB level.
 - SQLAlchemy 2.0 + Alembic give a clean ORM boundary and versioned migrations,
   so swapping the concrete engine later is a config change, not a rewrite.
 
