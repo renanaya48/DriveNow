@@ -18,10 +18,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Inject the real URL (escaping % for ConfigParser).
-config.set_main_option(
-    "sqlalchemy.url", get_settings().database_url.replace("%", "%%")
-)
+# Resolve the DB URL: an explicit value on the config wins (tests / `alembic -x`),
+# otherwise fall back to application settings. Escape % for ConfigParser.
+_url = config.get_main_option("sqlalchemy.url") or get_settings().database_url
+config.set_main_option("sqlalchemy.url", _url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
