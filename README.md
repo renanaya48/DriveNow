@@ -3,9 +3,13 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** skeleton (steps 0–1 of 13). Architecture is designed and the project
-> boots; business logic, endpoints, tests, metrics and the message queue are added
-> in later steps. See [docs/architecture.md](docs/architecture.md).
+> **Status:** early build (steps 0–2 of 13). Architecture is designed, the project
+> boots, and the database layer (models + migrations) is in place; business logic,
+> endpoints, tests, metrics and the message queue are added in later steps.
+> See [docs/architecture.md](docs/architecture.md).
+
+**Repository:** https://github.com/renanaya48/DriveNow — active work on branch
+`feature/vehicle-management-system`.
 
 ## Tech stack
 
