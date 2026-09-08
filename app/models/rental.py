@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, String
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,14 +18,16 @@ if TYPE_CHECKING:
 class Rental(TimestampMixin, Base):
     """A rental agreement for a single car over a fixed period.
 
-    ``start_date`` / ``end_date`` are the agreed term, both set when the rental is
-    registered. ``returned_at`` is ``None`` while the car is still out and is set
-    when the rental is ended; an *active* rental is one with ``returned_at IS NULL``.
+    ``start_at`` / ``end_at`` are the agreed term - a date *and time*, both set
+    when the rental is registered (a car is booked from a specific hour to a
+    specific hour). ``returned_at`` is ``None`` while the car is still out and is
+    set when the rental is ended; an *active* rental is one with
+    ``returned_at IS NULL``.
     """
 
     __tablename__ = "rentals"
     __table_args__ = (
-        CheckConstraint("end_date >= start_date", name="ck_rentals_end_after_start"),
+        CheckConstraint("end_at >= start_at", name="ck_rentals_end_after_start"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,9 +37,15 @@ class Rental(TimestampMixin, Base):
         index=True,
     )
     customer_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    returned_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    start_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    end_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    returned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     car: Mapped[Car] = relationship(back_populates="rentals")
 

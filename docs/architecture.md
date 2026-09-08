@@ -66,19 +66,19 @@ rentals
   id             INTEGER  PK
   car_id         INTEGER        NOT NULL  -> cars(id)        [index ix_rentals_car_id]
   customer_name  VARCHAR(200)   NOT NULL
-  start_date     DATE           NOT NULL   -- agreed term, set at registration
-  end_date       DATE           NOT NULL   -- agreed term, set at registration
-  returned_at    DATE           NULL       -- set when the rental is ended;
+  start_at       TIMESTAMPTZ    NOT NULL   -- agreed term (date + time), set at registration
+  end_at         TIMESTAMPTZ    NOT NULL   -- agreed term (date + time), set at registration
+  returned_at    TIMESTAMPTZ    NULL       -- set when the rental is ended;
                                            -- NULL => still active
                                            [index ix_rentals_returned_at]
   created_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
   updated_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
-  CHECK end_date >= start_date            (ck_rentals_end_after_start)
+  CHECK end_at >= start_at                (ck_rentals_end_after_start)
 ```
 
 **Active rental** = row with `returned_at IS NULL`. Keeping `returned_at` separate
-from the agreed `end_date` lets us later detect late returns
-(`returned_at > end_date`).
+from the agreed `end_at` lets us later detect late returns
+(`returned_at > end_at`).
 
 ## 3. Key flows
 
@@ -94,7 +94,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant P as EventPublisher
 
-    C->>API: POST /rentals {car_id, customer_name, start_date, end_date}
+    C->>API: POST /rentals {car_id, customer_name, start_at, end_at}
     API->>S: register_rental(dto)
     S->>CR: get_by_id(car_id)
     CR->>DB: SELECT car
@@ -105,7 +105,7 @@ sequenceDiagram
         S-->>API: CarNotAvailableError
         API-->>C: 409
     else ok
-        S->>RR: add(rental)  %% start_date, end_date from request; returned_at = NULL
+        S->>RR: add(rental)  %% start_at, end_at from request; returned_at = NULL
         S->>CR: car.status = in_use
         S->>DB: COMMIT (single transaction)
         S->>P: publish("rental.started", {...})  %% best-effort, after commit
@@ -135,7 +135,7 @@ sequenceDiagram
         S-->>API: RentalAlreadyEndedError
         API-->>C: 409
     else ok
-        S->>RR: rental.returned_at = today()
+        S->>RR: rental.returned_at = now()
         S->>RR: rental.car.status = available
         S->>DB: COMMIT
         S->>P: publish("rental.ended", {...})
@@ -162,7 +162,7 @@ sequenceDiagram
   row *and* flip the car's status atomically. A relational DB with ACID
   transactions gives this for free.
 - **Constraints as guardrails**: FK constraints, `NOT NULL`, a `CHECK` on
-  `status`, and `CHECK (end_date >= start_date)` stop invalid data at the DB level.
+  `status`, and `CHECK (end_at >= start_at)` stop invalid data at the DB level.
 - SQLAlchemy 2.0 + Alembic give a clean ORM boundary and versioned migrations,
   so swapping the concrete engine later is a config change, not a rewrite.
 
