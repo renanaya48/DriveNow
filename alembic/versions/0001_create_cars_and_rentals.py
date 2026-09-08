@@ -35,11 +35,13 @@ def upgrade() -> None:
                 "under_maintenance",
                 name="car_status",
                 native_enum=False,
+                create_constraint=True,
                 length=20,
             ),
             server_default="available",
             nullable=False,
         ),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -53,6 +55,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    op.create_index("ix_cars_deleted_at", "cars", ["deleted_at"])
 
     op.create_table(
         "rentals",
@@ -87,4 +90,5 @@ def downgrade() -> None:
     op.drop_index("ix_rentals_returned_at", table_name="rentals")
     op.drop_index("ix_rentals_car_id", table_name="rentals")
     op.drop_table("rentals")
+    op.drop_index("ix_cars_deleted_at", table_name="cars")
     op.drop_table("cars")

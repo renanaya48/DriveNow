@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,14 @@ def test_is_active_reflects_returned_at() -> None:
 
     rental.returned_at = datetime(2026, 1, 4, 12, 0, tzinfo=UTC)
     assert rental.is_active is False
+
+
+def test_is_deleted_reflects_deleted_at() -> None:
+    car = Car(model="Skoda Octavia", year=2022)
+    assert car.is_deleted is False
+
+    car.deleted_at = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    assert car.is_deleted is True
 
 
 def test_car_rental_relationship_both_directions(db_session: Session) -> None:
@@ -124,3 +132,29 @@ def test_migration_head_matches_model_metadata(tmp_path: object) -> None:
         assert {c["name"] for c in migrated.get_columns(table)} == {
             c["name"] for c in modelled.get_columns(table)
         }, f"column drift in {table!r}"
+        assert {c["name"] for c in migrated.get_check_constraints(table)} == {
+            c["name"] for c in modelled.get_check_constraints(table)
+        }, f"CHECK constraint drift in {table!r}"
+
+
+def test_invalid_status_rejected_by_db_check(db_session: Session) -> None:
+    """The CHECK on cars.status blocks values outside CarStatus (raw insert)."""
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            text(
+                "INSERT INTO cars (model, year, status, created_at, updated_at) "
+                "VALUES ('X', 2020, 'bogus', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+
+
+def test_status_stored_as_lowercase_value(db_session: Session) -> None:
+    """cars.status holds the enum value ('in_use'), not the member name."""
+    car = Car(model="Seat Leon", year=2022, status=CarStatus.IN_USE)
+    db_session.add(car)
+    db_session.flush()
+
+    stored = db_session.execute(
+        text("SELECT status FROM cars WHERE id = :id"), {"id": car.id}
+    ).scalar_one()
+    assert stored == "in_use"

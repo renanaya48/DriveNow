@@ -49,8 +49,9 @@ flowchart TD
 ### 2.1 Database schema
 
 Managed by Alembic (`alembic/versions/0001_create_cars_and_rentals.py`). Models in
-`app/models/`. `CarStatus` is stored as `VARCHAR` + `CHECK` (`native_enum=False`)
-so the same models run on PostgreSQL and on SQLite (tests).
+`app/models/`. `CarStatus` maps to `VARCHAR` + a named `CHECK`
+(`native_enum=False, create_constraint=True`), storing the enum *values*
+(`values_callable`), so the same models run on PostgreSQL and on SQLite (tests).
 
 ```
 cars
@@ -58,9 +59,11 @@ cars
   model        VARCHAR(100)   NOT NULL
   year         INTEGER        NOT NULL
   status       VARCHAR(20)    NOT NULL  DEFAULT 'available'
-                 CHECK status IN ('available','in_use','under_maintenance')
+                 CHECK status IN ('available','in_use','under_maintenance')  (car_status)
   created_at   TIMESTAMPTZ    NOT NULL  DEFAULT now()
   updated_at   TIMESTAMPTZ    NOT NULL  DEFAULT now()
+  deleted_at   TIMESTAMPTZ    NULL       -- soft delete: NULL => in fleet
+                                         [index ix_cars_deleted_at]
 
 rentals
   id             INTEGER  PK
@@ -79,6 +82,33 @@ rentals
 **Active rental** = row with `returned_at IS NULL`. Keeping `returned_at` separate
 from the agreed `end_at` lets us later detect late returns
 (`returned_at > end_at`).
+
+**Car removal is a soft delete.** `deleted_at` is stamped instead of deleting the
+row, so rental history is never lost and a retired car stays reachable through
+`Rental.car`. The `Car.rentals` relationship uses the default cascade only —
+removing a car must never touch its rentals.
+
+### 2.2 Repository layer
+
+`app/repositories/` — one narrow interface per aggregate, each backed by a
+SQLAlchemy implementation (same shape as `EventPublisher` / `NullPublisher`):
+
+- `CarRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `list(status=None)`, `update`, `soft_delete`
+- `RentalRepository`: `add`, `get_by_id`, `get_active_by_car`, `list_active`
+
+Rules:
+
+- Plain Python — **no FastAPI imports**. The session is passed to `__init__`.
+- `flush()` to assign PKs / surface constraint errors, but **never `commit` /
+  `rollback`** — the transaction (Unit of Work) belongs to the service.
+- Return ORM models, never DTOs. "Not found" → return `None`, never raise;
+  mapping `None` → `CarNotFoundError` is the service's job.
+- `get_by_id_for_update` issues `SELECT … FOR UPDATE` (PostgreSQL row lock;
+  no-op on SQLite). Step 5's `register_rental` uses it to serialise concurrent
+  bookings of the same car.
+- Every `CarRepository` read filters out `deleted_at IS NOT NULL`. `soft_delete`
+  stamps `deleted_at`; whether a car *may* be removed (e.g. not while it has an
+  active rental) is a business rule enforced by the service in step 5.
 
 ## 3. Key flows
 
@@ -152,7 +182,7 @@ sequenceDiagram
 | **O**pen/Closed | New event consumers or a new publisher backend added without touching services |
 | **L**iskov Substitution | `NullPublisher` and `RabbitMQPublisher` are fully interchangeable behind `EventPublisher` |
 | **I**nterface Segregation | Narrow repository interfaces – only the methods a service needs |
-| **D**ependency Inversion | Services depend on the `EventPublisher` protocol and repository abstractions, injected via FastAPI `Depends`, not on concrete classes |
+| **D**ependency Inversion | Services depend on the `EventPublisher` protocol and repository abstractions rather than concrete implementations. Concrete dependencies are assembled in the API composition root (`app/api/deps.py`) using FastAPI `Depends` |
 
 ## 5. Why PostgreSQL
 
