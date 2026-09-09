@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Rental
@@ -31,6 +31,8 @@ class RentalRepository(Protocol):
     def list_active(self) -> Sequence[Rental]: ...
 
     def update(self, rental: Rental) -> Rental: ...
+
+    def count_active(self) -> int: ...
 
 
 class SqlAlchemyRentalRepository:
@@ -83,3 +85,12 @@ class SqlAlchemyRentalRepository:
         # ``rental`` is already tracked; flush to surface constraint errors now.
         self._session.flush()
         return rental
+
+    def count_active(self) -> int:
+        """Number of open rentals (``returned_date IS NULL``)."""
+        stmt = (
+            select(func.count())
+            .select_from(Rental)
+            .where(Rental.returned_date.is_(None))
+        )
+        return self._session.scalar(stmt) or 0

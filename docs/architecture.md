@@ -96,8 +96,8 @@ removing a car must never touch its rentals.
 `app/repositories/` — one narrow interface per aggregate, each backed by a
 SQLAlchemy implementation (same shape as `EventPublisher` / `NullPublisher`):
 
-- `CarRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `list(status=None)`, `update`, `soft_delete`
-- `RentalRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `get_active_by_car`, `list_active`, `update`
+- `CarRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `list(status=None)`, `update`, `soft_delete`, `count_by_status`
+- `RentalRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `get_active_by_car`, `list_active`, `update`, `count_active`
 
 Rules:
 
@@ -333,8 +333,22 @@ application code – more work for no benefit at this shape and scale.
 
   It is an operational trace, not a durable/immutable audit store. Uvicorn's own
   loggers are left untouched.
-- **Metrics** (`app/core/metrics.py`): `prometheus_client` exposed at `/metrics` –
-  available cars (gauge), ongoing rentals (gauge), request/operation latency
-  (histogram), operation counters.
+- **Metrics** (`app/core/metrics.py`, `app/api/metrics.py`, `app/api/middleware.py`):
+  `prometheus_client` on the default registry, exposed at **`GET /metrics`** (a
+  real route, so it can query the DB).
+
+  | Metric | Type | Fed by |
+  |---|---|---|
+  | `drivenow_cars{status}` | gauge | scrape-time `COUNT` — non-deleted cars by status. Active fleet = `sum(...)`; available = `{status="available"}` |
+  | `drivenow_ongoing_rentals` | gauge | scrape-time `COUNT` — `returned_date IS NULL` |
+  | `drivenow_request_duration_seconds{operation}` | histogram | `MetricsMiddleware`; average latency = `rate(_sum)/rate(_count)` |
+  | `drivenow_operations_total{operation, outcome}` | counter | `MetricsMiddleware`; `outcome` is the HTTP status class (e.g. `2xx` / `4xx` / `5xx`) |
+
+  Gauges are recomputed from the DB on every scrape (accurate, restart-safe,
+  no service changes). `MetricsMiddleware` is a **pure-ASGI** middleware (not
+  `BaseHTTPMiddleware`) that records **exactly one** sample per request, labelled
+  by the matched route template (`POST /cars`, `PATCH /cars/{car_id}`), and
+  **skips** `/metrics`, `/health`, `/docs`, `/docs/oauth2-redirect`,
+  `/openapi.json`, `/redoc`.
 - **Messaging** (`app/messaging/`): domain events published best-effort after a
   successful commit; a failure to publish is logged, never fatal to the request.

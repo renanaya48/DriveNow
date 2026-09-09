@@ -10,10 +10,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from prometheus_client import make_asgi_app
 
-from app.api import cars, health, rentals
+from app.api import cars, health, metrics, rentals
 from app.api.errors import register_exception_handlers
+from app.api.middleware import MetricsMiddleware
 from app.core import metrics as _metrics  # noqa: F401  (import registers Prometheus metrics)
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -36,13 +36,12 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(app)
+    app.add_middleware(MetricsMiddleware)
 
     app.include_router(health.router)
     app.include_router(cars.router)
     app.include_router(rentals.router)
-
-    # Prometheus scrape endpoint. Metric definitions live in app/core/metrics.py.
-    app.mount("/metrics", make_asgi_app())
+    app.include_router(metrics.router)  # GET /metrics (refreshes gauges from the DB)
 
     return app
 

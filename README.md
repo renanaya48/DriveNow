@@ -3,9 +3,9 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–7 of 13). The database, repository, DTO,
-> service, REST API and logging layers are in place and working end to end;
-> metrics and the message queue are added in later steps.
+> **Status:** build in progress (steps 0–8 of 13). The database, repository, DTO,
+> service, REST API, logging and metrics layers are in place and working end to
+> end; the message queue and Docker polish are added in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
@@ -159,6 +159,21 @@ traceback (and return `500 {"detail": "internal server error"}` — no stack tra
 in the response). Verbosity is set with `LOG_LEVEL` (default `INFO`). Messages
 carry IDs and dates, never customer names.
 
+## Metrics
+
+`GET /metrics` exposes Prometheus text (default registry):
+
+| Metric | Meaning |
+|---|---|
+| `drivenow_cars{status="…"}` | non-deleted fleet cars by status. `sum(drivenow_cars)` = active fleet; `drivenow_cars{status="available"}` = available now |
+| `drivenow_ongoing_rentals` | rentals with no return date |
+| `drivenow_request_duration_seconds{operation="…"}` | request latency histogram. Average = `rate(drivenow_request_duration_seconds_sum[5m]) / rate(drivenow_request_duration_seconds_count[5m])` |
+| `drivenow_operations_total{operation,outcome}` | requests by route template and HTTP status class (e.g. `2xx`/`4xx`/`5xx`) |
+
+The gauges are recomputed from the DB on every scrape. `/metrics`, `/health` and
+the docs routes are not timed. (A `prometheus` service for `docker compose` comes
+with the Docker polish step.)
+
 ## Tests
 
 ```bash
@@ -183,7 +198,7 @@ poetry run mypy app
 | 5 | Service layer (car + rental lifecycle) *(done)* |
 | 6 | REST endpoints *(done)* |
 | 7 | Logging of critical actions *(done)* |
-| 8 | Prometheus metrics |
+| 8 | Prometheus metrics *(done)* |
 | 9 | RabbitMQ publisher + consumer |
 | 10 | Unit tests (≥ 4) |
 | 11 | Docker polish |

@@ -117,6 +117,22 @@ def test_soft_deleted_car_still_reachable_via_rental_history(db_session: Session
     assert reloaded.car.id == car.id  # history keeps its link to the retired car
 
 
+def test_car_count_by_status_excludes_deleted(db_session: Session) -> None:
+    repo = SqlAlchemyCarRepository(db_session)
+    repo.add(Car(model="A", year=2020, status=CarStatus.AVAILABLE))
+    repo.add(Car(model="B", year=2021, status=CarStatus.AVAILABLE))
+    repo.add(Car(model="C", year=2022, status=CarStatus.IN_USE))
+    repo.add(Car(model="D", year=2018, status=CarStatus.UNDER_MAINTENANCE))
+    gone = repo.add(Car(model="E", year=2019, status=CarStatus.AVAILABLE))
+    repo.soft_delete(gone)
+
+    assert repo.count_by_status() == {
+        CarStatus.AVAILABLE: 2,  # 'E' is soft-deleted, excluded
+        CarStatus.IN_USE: 1,
+        CarStatus.UNDER_MAINTENANCE: 1,
+    }
+
+
 def test_car_repo_satisfies_protocol(db_session: Session) -> None:
     assert isinstance(SqlAlchemyCarRepository(db_session), CarRepository)
 
@@ -196,6 +212,25 @@ def test_rental_update_persists_change(db_session: Session) -> None:
     reloaded = repo.get_by_id(rental.id)
     assert reloaded is not None
     assert reloaded.returned_date == _END
+
+
+def test_rental_count_active(db_session: Session) -> None:
+    car_a = _add_car(db_session, model="A")
+    car_b = _add_car(db_session, model="B")
+    repo = SqlAlchemyRentalRepository(db_session)
+    assert repo.count_active() == 0
+
+    repo.add(
+        Rental(car_id=car_a.id, customer_name="Open", start_date=_START, end_date=_END)
+    )
+    closed = repo.add(
+        Rental(car_id=car_b.id, customer_name="Done", start_date=_START, end_date=_END)
+    )
+    assert repo.count_active() == 2
+
+    closed.returned_date = _END
+    db_session.flush()
+    assert repo.count_active() == 1
 
 
 def test_rental_repo_satisfies_protocol(db_session: Session) -> None:

@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Car, CarStatus
@@ -36,6 +36,8 @@ class CarRepository(Protocol):
     def update(self, car: Car) -> Car: ...
 
     def soft_delete(self, car: Car) -> Car: ...
+
+    def count_by_status(self) -> dict[CarStatus, int]: ...
 
 
 class SqlAlchemyCarRepository:
@@ -89,3 +91,12 @@ class SqlAlchemyCarRepository:
         car.deleted_at = datetime.now(UTC)
         self._session.flush()
         return car
+
+    def count_by_status(self) -> dict[CarStatus, int]:
+        """Count non-deleted cars grouped by status (for the metrics scrape)."""
+        stmt = (
+            select(Car.status, func.count())
+            .where(Car.deleted_at.is_(None))
+            .group_by(Car.status)
+        )
+        return {status: n for status, n in self._session.execute(stmt)}
