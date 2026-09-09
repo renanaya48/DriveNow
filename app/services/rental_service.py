@@ -92,6 +92,13 @@ class RentalService:
             car.status = CarStatus.IN_USE
             self._cars.update(car)
 
+        logger.info(
+            "rental started rental_id=%s car_id=%s start=%s end=%s",
+            rental.id,
+            car.id,
+            rental.start_date,
+            rental.end_date,
+        )
         self._publish(
             "rental.started", {"rental_id": rental.id, "car_id": car.id}
         )
@@ -124,6 +131,12 @@ class RentalService:
             self._rentals.update(rental)
             self._cars.update(car)
 
+        logger.info(
+            "rental ended rental_id=%s car_id=%s returned=%s",
+            rental.id,
+            car.id,
+            rental.returned_date,
+        )
         self._publish(
             "rental.ended", {"rental_id": rental.id, "car_id": car.id}
         )

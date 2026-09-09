@@ -1,8 +1,10 @@
 """Central logging configuration: console + rotating file.
 
 Configured once at startup. Every module then uses ``logging.getLogger(__name__)``.
-Step 7 extends this (structured fields, per-action helpers); the transport setup
-below is the stable base.
+The services emit one INFO line per successful business action (`key=value`
+message style); the API exception handlers log rejections (WARNING) and
+unexpected errors (ERROR + traceback). The transport below sends all of it to
+both the console and ``logs/app.log``. Uvicorn's own loggers are left untouched.
 """
 
 from __future__ import annotations

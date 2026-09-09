@@ -319,9 +319,20 @@ application code – more work for no benefit at this shape and scale.
 
 ## 6. Cross-cutting concerns
 
-- **Logging** (`app/core/logging.py`): stdlib `logging`, `dictConfig`, console +
-  `RotatingFileHandler` to `logs/app.log`. Services log add/update/rental
-  lifecycle/errors.
+- **Logging** (`app/core/logging.py`): stdlib `logging` + `dictConfig`, one
+  format to **console and** `logs/app.log` (rotating, 5 MB × 3); level via
+  `LOG_LEVEL`. Messages carry context as `key=value` (IDs, `changed`, dates —
+  **never** `customer_name`). Who logs what:
+
+  | Situation | Level | Emitted by |
+  |---|---|---|
+  | successful business action (car added/updated/retired, rental started/ended) | `INFO` | the service, after commit |
+  | request rejected by a business rule (`DomainError`) | `WARNING` | the `DomainError` handler (`app/api/errors.py`) |
+  | unexpected exception → `500` | `ERROR` + traceback | the generic `Exception` handler |
+  | event publish failed | `ERROR` + traceback | the `_publish` helper in `CarService` / `RentalService` (best-effort) |
+
+  It is an operational trace, not a durable/immutable audit store. Uvicorn's own
+  loggers are left untouched.
 - **Metrics** (`app/core/metrics.py`): `prometheus_client` exposed at `/metrics` –
   available cars (gauge), ongoing rentals (gauge), request/operation latency
   (histogram), operation counters.

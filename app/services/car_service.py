@@ -69,6 +69,9 @@ class CarService:
     def add_car(self, dto: CarCreate) -> Car:
         with self._transaction():
             car = self._cars.add(Car(model=dto.model, year=dto.year))
+        logger.info(
+            "car added car_id=%s model=%r year=%s", car.id, car.model, car.year
+        )
         self._publish("car.added", {"car_id": car.id})
         return car
 
@@ -97,7 +100,9 @@ class CarService:
                 setattr(car, field, value)
             self._cars.update(car)
 
-        self._publish("car.updated", {"car_id": car.id, "changed": sorted(actual)})
+        changed = sorted(actual)
+        logger.info("car updated car_id=%s changed=%s", car.id, changed)
+        self._publish("car.updated", {"car_id": car.id, "changed": changed})
         return car
 
     def list_cars(self, *, status: CarStatus | None = None) -> Sequence[Car]:
@@ -113,5 +118,6 @@ class CarService:
                     f"car {car_id} has an active rental and cannot be removed"
                 )
             self._cars.soft_delete(car)
+        logger.info("car retired car_id=%s", car.id)
         self._publish("car.deleted", {"car_id": car.id})
         return car

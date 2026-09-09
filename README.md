@@ -3,8 +3,8 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–6 of 13). The database, repository, DTO,
-> service and REST API layers are in place and working end to end; logging,
+> **Status:** build in progress (steps 0–7 of 13). The database, repository, DTO,
+> service, REST API and logging layers are in place and working end to end;
 > metrics and the message queue are added in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
@@ -144,6 +144,21 @@ Errors carry `{"detail": "<message>"}`: `404` unknown car/rental, `409` state
 conflict (car not available, illegal status change, car has an active rental,
 rental already ended), `422` invalid input or a broken date rule.
 
+## Logs
+
+Every successful critical action (car added / updated / retired, rental started /
+ended) writes one `INFO` line, in the same format to **stdout and**
+`logs/app.log` (`RotatingFileHandler`, 5 MB × 3 backups):
+
+```
+2026-09-09T10:25:29+0300 | INFO     | app.services.rental_service | rental started rental_id=1 car_id=1 start=2026-09-09 end=2026-09-16
+```
+
+Rejected requests log a `WARNING`; unexpected errors log an `ERROR` with a
+traceback (and return `500 {"detail": "internal server error"}` — no stack trace
+in the response). Verbosity is set with `LOG_LEVEL` (default `INFO`). Messages
+carry IDs and dates, never customer names.
+
 ## Tests
 
 ```bash
@@ -167,7 +182,7 @@ poetry run mypy app
 | 4 | Pydantic DTOs *(done)* |
 | 5 | Service layer (car + rental lifecycle) *(done)* |
 | 6 | REST endpoints *(done)* |
-| 7 | Logging of critical actions |
+| 7 | Logging of critical actions *(done)* |
 | 8 | Prometheus metrics |
 | 9 | RabbitMQ publisher + consumer |
 | 10 | Unit tests (≥ 4) |
