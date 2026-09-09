@@ -5,14 +5,32 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–11 of 13). The database, repository, DTO,
-> service, REST API, logging, metrics and message-queue layers are in place and
-> working end to end, with a branch-covered test suite and a one-command Docker
-> stack (API + Postgres + RabbitMQ + Prometheus + Grafana); README diagrams are
-> the last polish step. See [docs/architecture.md](docs/architecture.md).
+> A feature-complete vehicle-management service: REST API, PostgreSQL,
+> best-effort RabbitMQ events, Prometheus/Grafana observability, a one-command
+> Docker Compose stack, and CI. Architecture and trade-offs:
+> [docs/architecture.md](docs/architecture.md).
 
-**Repository:** https://github.com/renanaya48/DriveNow — active work on branch
+**Repository:** https://github.com/renanaya48/DriveNow — work on branch
 `feature/vehicle-management-system`.
+
+*Short on time? Read [Highlights](#highlights) →
+[Architecture at a glance](#architecture-at-a-glance) → [Quickstart](#quickstart)
+→ [Screenshots](#screenshots).*
+
+## Highlights
+
+- **Layered architecture** — HTTP, business rules, persistence and infrastructure
+  stay separate, so each layer is swappable and testable in isolation.
+- **Unit-of-Work transactions** — creating a rental and flipping the car's status
+  commit atomically or not at all.
+- **Explicit CAR→RENTAL lock ordering** — every lifecycle operation takes the
+  same locks in the same order, which keeps concurrent acquisition consistent and
+  reduces deadlock risk.
+- **Best-effort messaging by design** — a RabbitMQ outage never blocks a rental;
+  the publish is logged and the consumer reconnects on its own.
+- **Observability built in** — `prometheus-client` metrics feed a *provisioned*
+  Grafana dashboard: request latency, outcome mix, fleet state, active rentals.
+- **159 tests, branch-aware coverage with a 95% gate, CI** on every push.
 
 ## Tech stack
 
@@ -33,37 +51,133 @@ registration needs an atomic "create rental + flip car status" transaction, and
 DB constraints keep invalid data out. Full rationale in
 [docs/architecture.md](docs/architecture.md#5-why-postgresql).
 
+## Quickstart
+
+```bash
+git clone --branch feature/vehicle-management-system https://github.com/renanaya48/DriveNow.git
+cd DriveNow
+docker compose up --build
+```
+
+*(Once the branch is merged in step 13, `--branch …` is no longer needed.)*
+
+Open [Swagger](http://localhost:8000/docs) and [Grafana](http://localhost:3000).
+Run the demo flow in [Using the API](#using-the-api) to add a car, start/end a
+rental, and watch the metrics and consumer log update.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Swagger UI listing the six DriveNow endpoints](docs/img/swagger.png) | ![Grafana DriveNow dashboard with live fleet and request panels](docs/img/grafana.png) |
+| *Swagger UI — the six endpoints.* | *Grafana — the provisioned **DriveNow** dashboard.* |
+
+![RabbitMQ management UI - Queues, showing the durable drivenow.event_logger queue running with its message-rate columns](docs/img/rabbitmq.png)
+
+*RabbitMQ — the durable `drivenow.event_logger` queue (bound to the
+`drivenow.events` topic exchange) consuming events.*
+
 ## Architecture at a glance
 
-```
-HTTP  ─►  API layer      (app/api)          routers, HTTP <-> DTO only
-          Service layer  (app/services)     business rules, transactions, events
-          Repository     (app/repositories) all DB queries
-          ORM models     (app/models)       SQLAlchemy models + CarStatus
-          PostgreSQL
+```mermaid
+flowchart TD
+    client["HTTP client / Swagger UI"]
+    api["API layer — app/api\nrouters, HTTP <-> DTO only"]
+    svc["Service layer — app/services\nbusiness rules, transactions, events"]
+    repo["Repository layer — app/repositories\nall DB queries"]
+    models["ORM models — app/models\nSQLAlchemy + CarStatus"]
+    db[("PostgreSQL")]
+    pub["app/messaging\nEventPublisher"]
+    mq{{"RabbitMQ"}}
+    prom["Prometheus"]
+    graf["Grafana"]
 
-Cross-cutting (app/core): config · logging · metrics · db session · DI
-Side channel  (app/messaging): EventPublisher ─► RabbitMQ
+    client --> api --> svc --> repo --> models --> db
+    svc -.->|best-effort: car.* / rental.* events| pub -.-> mq
+    prom -- "scrape /metrics" --> api
+    graf -- "query" --> prom
 ```
 
-Dependencies point one way only (API → Service → Repository → Models). Diagrams
-and the SOLID mapping are in [docs/architecture.md](docs/architecture.md).
+Dependencies point one way only (API → Service → Repository → Models). The
+sequence diagrams, SOLID mapping and schema are in
+[docs/architecture.md](docs/architecture.md).
 
-## Project layout
+## Using the API
 
+Interactive docs (Swagger UI) at `http://localhost:8000/docs` once the server is
+up — every operation can be run there with **Try it out**, no `curl` needed.
+
+```bash
+BASE=http://localhost:8000
+TODAY=$(date +%F)
+NEXT_WEEK=$(date -d '+7 days' +%F)   # macOS: date -v+7d +%F
+
+# Add a car
+curl -sX POST $BASE/cars -H 'content-type: application/json' \
+  -d '{"model": "Toyota Corolla", "year": 2023}'
+# -> 201 {"id":1,"model":"Toyota Corolla","year":2023,"status":"available", ...}
+
+# List cars (optional ?status=available|in_use|under_maintenance)
+curl -s $BASE/cars
+curl -s "$BASE/cars?status=available"
+
+# Update a car (partial; e.g. send it for maintenance)
+curl -sX PATCH $BASE/cars/1 -H 'content-type: application/json' \
+  -d '{"status": "under_maintenance"}'
+
+# Register a rental (start_date must be today)
+curl -sX POST $BASE/rentals -H 'content-type: application/json' \
+  -d "{\"car_id\": 1, \"customer_name\": \"Dana\", \"start_date\": \"$TODAY\", \"end_date\": \"$NEXT_WEEK\"}"
+# -> 201 {"id":1,"car_id":1,"returned_date":null,"is_active":true, ...}   (car is now in_use)
+
+# End the rental (frees the car)
+curl -sX POST $BASE/rentals/1/end
+# -> 200 {"id":1,"returned_date":"<today>","is_active":false, ...}        (car is available again)
+
+# Retire a car (soft delete; blocked while it has an active rental)
+curl -isX DELETE $BASE/cars/1        # -> 204 No Content
 ```
-app/
-  api/          FastAPI routers, DI providers, HTTP error mapping
-  services/     business logic + domain exceptions
-  repositories/ data access layer
-  models/       SQLAlchemy models, CarStatus enum
-  schemas/      Pydantic request/response DTOs
-  messaging/    EventPublisher (Protocol), NullPublisher, consumer worker
-  core/         config, logging, metrics
-  main.py       application factory
-tests/          pytest suite
-docs/           architecture.md
+
+Example responses:
+
+`POST /cars` → **201 Created**
+
+```json
+{
+  "id": 1,
+  "model": "Toyota Corolla",
+  "year": 2023,
+  "status": "available",
+  "created_at": "2026-09-09T10:25:11Z",
+  "updated_at": "2026-09-09T10:25:11Z"
+}
 ```
+
+`POST /rentals` → **201 Created** (car 1 is now `in_use`)
+
+```json
+{
+  "id": 1,
+  "car_id": 1,
+  "customer_name": "Dana",
+  "start_date": "2026-09-09",
+  "end_date": "2026-09-16",
+  "returned_date": null,
+  "is_active": true,
+  "created_at": "2026-09-09T10:25:12Z",
+  "updated_at": "2026-09-09T10:25:12Z"
+}
+```
+
+`PATCH /cars/99` → **404 Not Found**
+
+```json
+{ "detail": "car 99 not found" }
+```
+
+Errors carry `{"detail": "<message>"}`: `404` unknown car/rental, `409` state
+conflict (car not available, illegal status change, car has an active rental,
+rental already ended), `422` invalid input or a broken date rule.
 
 ## Run it
 
@@ -109,6 +223,22 @@ waits only for `db` to be healthy — **RabbitMQ being down does not stop the AP
 > Published ports, the `drivenow`/`drivenow` credentials and Grafana's anonymous
 > view are a local-demo convenience, not a production security posture.
 
+## Project layout
+
+```
+app/
+  api/          FastAPI routers, DI providers, HTTP error mapping
+  services/     business logic + domain exceptions
+  repositories/ data access layer
+  models/       SQLAlchemy models, CarStatus enum
+  schemas/      Pydantic request/response DTOs
+  messaging/    EventPublisher (Protocol), NullPublisher, consumer worker
+  core/         config, logging, metrics
+  main.py       application factory
+tests/          pytest suite
+docs/           architecture.md, img/
+```
+
 ## Database & migrations
 
 Schema is managed with **Alembic**. The DB URL comes from `DATABASE_URL`
@@ -124,46 +254,6 @@ poetry run alembic current                 # show applied revision
 Tables: `cars`, `rentals` (see [docs/architecture.md](docs/architecture.md#schema)).
 Models live in `app/models/`; a DB session is obtained via the `get_db` FastAPI
 dependency (`app/core/db.py`).
-
-## Using the API
-
-Interactive docs (Swagger UI) at `http://localhost:8000/docs` once the server is
-up. All six operations:
-
-```bash
-BASE=http://localhost:8000
-TODAY=$(date +%F)
-NEXT_WEEK=$(date -d '+7 days' +%F)   # macOS: date -v+7d +%F
-
-# Add a car
-curl -sX POST $BASE/cars -H 'content-type: application/json' \
-  -d '{"model": "Toyota Corolla", "year": 2023}'
-# -> 201 {"id":1,"model":"Toyota Corolla","year":2023,"status":"available", ...}
-
-# List cars (optional ?status=available|in_use|under_maintenance)
-curl -s $BASE/cars
-curl -s "$BASE/cars?status=available"
-
-# Update a car (partial; e.g. send it for maintenance)
-curl -sX PATCH $BASE/cars/1 -H 'content-type: application/json' \
-  -d '{"status": "under_maintenance"}'
-
-# Register a rental (start_date must be today)
-curl -sX POST $BASE/rentals -H 'content-type: application/json' \
-  -d "{\"car_id\": 1, \"customer_name\": \"Dana\", \"start_date\": \"$TODAY\", \"end_date\": \"$NEXT_WEEK\"}"
-# -> 201 {"id":1,"car_id":1,"returned_date":null,"is_active":true, ...}   (car is now in_use)
-
-# End the rental (frees the car)
-curl -sX POST $BASE/rentals/1/end
-# -> 200 {"id":1,"returned_date":"<today>","is_active":false, ...}        (car is available again)
-
-# Retire a car (soft delete; blocked while it has an active rental)
-curl -isX DELETE $BASE/cars/1        # -> 204 No Content
-```
-
-Errors carry `{"detail": "<message>"}`: `404` unknown car/rental, `409` state
-conflict (car not available, illegal status change, car has an active rental,
-rental already ended), `422` invalid input or a broken date rule.
 
 ## Logs
 
@@ -282,5 +372,5 @@ poetry run mypy app
 | 9 | RabbitMQ publisher + consumer *(done)* |
 | 10 | Unit tests (≥ 4) + coverage gate *(done)* |
 | 11 | Docker polish: non-root image, Prometheus + Grafana, CI *(done)* |
-| 12 | README: diagrams, examples, screenshots |
-| 13 | Git: feature branch, PR |
+| 12 | README: diagrams, examples, screenshots *(done)* |
+| 13 | Open PR `feature/vehicle-management-system` → `main` |

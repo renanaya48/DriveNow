@@ -29,7 +29,7 @@ flowchart TD
     pub["app/messaging/\nEventPublisher (Protocol) + NullPublisher / RabbitMQPublisher"]
 
     client --> api --> svc --> repo --> models --> db
-    svc -.->|publish rental.started / rental.ended| pub -.-> mq
+    svc -.->|publish car.* / rental.* events| pub -.-> mq
     core -.provides.-> api
     core -.provides.-> svc
     core -.provides.-> repo
