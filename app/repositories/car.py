@@ -59,11 +59,16 @@ class SqlAlchemyCarRepository:
         Emits ``SELECT ... FOR UPDATE`` on PostgreSQL so a concurrent rental
         registration for the same car serialises behind this transaction. On
         SQLite ``with_for_update`` is a no-op (single-writer anyway).
+
+        ``populate_existing`` forces the row already in the session's identity
+        map to be refreshed from this locked read, so "lock then re-validate"
+        actually sees post-lock state.
         """
         stmt = (
             select(Car)
             .where(Car.id == car_id, Car.deleted_at.is_(None))
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return self._session.scalars(stmt).first()
 

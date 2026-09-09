@@ -170,5 +170,33 @@ def test_rental_list_active_excludes_returned(db_session: Session) -> None:
     assert [r.id for r in repo.list_active()] == [open_rental.id]
 
 
+def test_rental_get_by_id_for_update(db_session: Session) -> None:
+    car = _add_car(db_session)
+    repo = SqlAlchemyRentalRepository(db_session)
+    rental = repo.add(
+        Rental(car_id=car.id, customer_name="Dana", start_date=_START, end_date=_END)
+    )
+
+    # with_for_update is a no-op on SQLite; the row still comes back.
+    assert repo.get_by_id_for_update(rental.id) is rental
+    assert repo.get_by_id_for_update(999_999) is None
+
+
+def test_rental_update_persists_change(db_session: Session) -> None:
+    car = _add_car(db_session)
+    repo = SqlAlchemyRentalRepository(db_session)
+    rental = repo.add(
+        Rental(car_id=car.id, customer_name="Dana", start_date=_START, end_date=_END)
+    )
+
+    rental.returned_date = _END
+    repo.update(rental)
+    db_session.expire_all()
+
+    reloaded = repo.get_by_id(rental.id)
+    assert reloaded is not None
+    assert reloaded.returned_date == _END
+
+
 def test_rental_repo_satisfies_protocol(db_session: Session) -> None:
     assert isinstance(SqlAlchemyRentalRepository(db_session), RentalRepository)

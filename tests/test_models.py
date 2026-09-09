@@ -111,6 +111,42 @@ def test_foreign_key_is_enforced(db_session: Session) -> None:
         db_session.commit()
 
 
+def test_returned_before_start_rejected_by_db_check(db_session: Session) -> None:
+    car = Car(model="Polo", year=2019)
+    db_session.add(car)
+    db_session.flush()
+
+    db_session.add(
+        Rental(
+            car_id=car.id,
+            customer_name="Ari",
+            start_date=_END,
+            end_date=_END,
+            returned_date=_START,  # returned before it started
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_second_active_rental_for_a_car_rejected(db_session: Session) -> None:
+    """The partial unique index allows at most one open rental per car."""
+    car = Car(model="Ibiza", year=2020)
+    db_session.add(car)
+    db_session.flush()
+
+    db_session.add(
+        Rental(car_id=car.id, customer_name="First", start_date=_START, end_date=_END)
+    )
+    db_session.flush()
+
+    db_session.add(
+        Rental(car_id=car.id, customer_name="Second", start_date=_START, end_date=_END)
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
 def test_migration_head_matches_model_metadata(tmp_path: object) -> None:
     """`alembic upgrade head` yields the same tables/columns as the models."""
     from alembic.command import upgrade
@@ -135,8 +171,10 @@ def test_migration_head_matches_model_metadata(tmp_path: object) -> None:
         assert {c["name"] for c in migrated.get_check_constraints(table)} == {
             c["name"] for c in modelled.get_check_constraints(table)
         }, f"CHECK constraint drift in {table!r}"
-        assert {i["name"] for i in migrated.get_indexes(table)} == {
-            i["name"] for i in modelled.get_indexes(table)
+        assert {
+            (i["name"], i["unique"]) for i in migrated.get_indexes(table)
+        } == {
+            (i["name"], i["unique"]) for i in modelled.get_indexes(table)
         }, f"index drift in {table!r}"
         assert {
             (tuple(fk["constrained_columns"]), fk["referred_table"])

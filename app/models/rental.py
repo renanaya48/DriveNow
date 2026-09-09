@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, String
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -27,6 +27,19 @@ class Rental(TimestampMixin, Base):
     __tablename__ = "rentals"
     __table_args__ = (
         CheckConstraint("end_date >= start_date", name="ck_rentals_end_after_start"),
+        CheckConstraint(
+            "returned_date IS NULL OR returned_date >= start_date",
+            name="ck_rentals_returned_after_start",
+        ),
+        # At most one open rental per car - the DB backstop behind the service
+        # checks and the SELECT ... FOR UPDATE lock.
+        Index(
+            "uq_rentals_one_active_per_car",
+            "car_id",
+            unique=True,
+            sqlite_where=text("returned_date IS NULL"),
+            postgresql_where=text("returned_date IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

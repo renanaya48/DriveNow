@@ -76,12 +76,15 @@ rentals
                                            [index ix_rentals_returned_date]
   created_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
   updated_at     TIMESTAMPTZ    NOT NULL  DEFAULT now()
-  CHECK end_date >= start_date            (ck_rentals_end_after_start)
+  CHECK end_date >= start_date                              (ck_rentals_end_after_start)
+  CHECK returned_date IS NULL OR returned_date >= start_date (ck_rentals_returned_after_start)
+  UNIQUE (car_id) WHERE returned_date IS NULL               (uq_rentals_one_active_per_car)
 ```
 
 **Active rental** = row with `returned_date IS NULL`. Keeping `returned_date`
 separate from the agreed `end_date` lets us later detect late returns
-(`returned_date > end_date`).
+(`returned_date > end_date`). The partial unique index enforces **at most one
+open rental per car** at the DB level.
 
 **Car removal is a soft delete.** `deleted_at` is stamped instead of deleting the
 row, so rental history is never lost and a retired car stays reachable through
@@ -143,6 +146,58 @@ field is a `422`, not silently dropped. Response DTOs subclass `ORMModel`
 
 The service does not skip validation — it owns the business invariants.
 
+### 2.4 Service layer
+
+`app/services/` — `CarService` (`add_car`, `update_car`, `list_cars`,
+`delete_car`) and `RentalService` (`register_rental`, `end_rental`). Plain Python,
+no FastAPI. Each service holds a `UnitOfWork` + the repositories + an
+`EventPublisher`, all sharing one DB session.
+
+**Transaction ownership.** Repositories `flush` but never commit. Each service
+method runs its repository calls inside `_transaction()`: commit on a clean exit,
+`rollback()` + re-raise on any exception. Events are published **after** commit
+and are **best-effort** — a publish failure is logged, never rolls anything back.
+*Event publication is deliberately best-effort for this assignment; a production
+system needing guaranteed delivery would use the transactional outbox pattern.*
+
+**Concurrency — global lock order: CAR → RENTAL.** Every lifecycle operation
+takes the car row lock (`get_by_id_for_update`, `SELECT … FOR UPDATE` on
+PostgreSQL, no-op on SQLite) so they serialise:
+
+| Operation | Locks (in order) |
+|---|---|
+| `update_car` / `delete_car` / `register_rental` | car |
+| `end_rental` | unlocked read of the rental for its `car_id` → **car** → re-read rental **for update** (`populate_existing`) → validate the locked rental |
+
+Every operation needing both locks acquires them in the **same** order
+(CAR → RENTAL); no operation acquires them in the opposite order, so there is no
+lock-order cycle.
+
+**One open rental per car** is guarded in three layers:
+
+1. `car.status == AVAILABLE` check;
+2. explicit `rentals.get_active_by_car` after the lock — this is what converts an
+   inconsistent row (`AVAILABLE` yet an open rental exists) into a domain-level
+   `CarNotAvailableError`;
+3. the partial unique index `uq_rentals_one_active_per_car` — the final database
+   integrity backstop (it raises `IntegrityError` if the code path ever reaches it).
+
+**Status transitions** (enforced by `update_car`): `AVAILABLE ↔ UNDER_MAINTENANCE`
+only; `IN_USE` is entered by `register_rental` and left by `end_rental`. A
+same-value or empty update is a no-op — no write, no event.
+
+**`register_rental` starts a rental today** — not a reservation system, not
+historical import: `dto.start_date` must equal today.
+
+**Domain events** (minimal payloads; the publisher adds id/timestamp envelope
+metadata in step 9):
+
+| Event | Payload |
+|---|---|
+| `car.added` / `car.deleted` | `{"car_id": int}` |
+| `car.updated` | `{"car_id": int, "changed": [field, …]}` |
+| `rental.started` / `rental.ended` | `{"rental_id": int, "car_id": int}` |
+
 ## 3. Key flows
 
 ### 3.1 Register a rental — `POST /rentals`
@@ -159,21 +214,22 @@ sequenceDiagram
 
     C->>API: POST /rentals {car_id, customer_name, start_date, end_date}
     API->>S: register_rental(dto)
-    S->>CR: get_by_id(car_id)
-    CR->>DB: SELECT car
-    alt car missing
+    Note over S: reject unless start_date == today (RentalDateError)
+    S->>CR: get_by_id_for_update(car_id)  %% SELECT ... FOR UPDATE
+    CR->>DB: SELECT car FOR UPDATE
+    alt car missing / soft-deleted
         S-->>API: CarNotFoundError
         API-->>C: 404
-    else car.status != available
+    else car.status != available OR open rental exists
         S-->>API: CarNotAvailableError
         API-->>C: 409
     else ok
-        S->>RR: add(rental)  %% start_date, end_date from request; returned_date = NULL
-        S->>CR: car.status = in_use
-        S->>DB: COMMIT (single transaction)
+        S->>RR: add(rental)  %% returned_date = NULL
+        S->>CR: car.status = in_use ; update(car)
+        S->>DB: uow.commit()  %% one atomic transaction
         S->>P: publish("rental.started", {...})  %% best-effort, after commit
-        S-->>API: RentalRead
-        API-->>C: 201
+        S-->>API: Rental
+        API-->>C: 201 RentalRead
     end
 ```
 
@@ -184,26 +240,31 @@ sequenceDiagram
     participant C as Client
     participant API as API (rentals router)
     participant S as RentalService
+    participant CR as CarRepository
     participant RR as RentalRepository
     participant DB as PostgreSQL
     participant P as EventPublisher
 
     C->>API: POST /rentals/{id}/end
     API->>S: end_rental(id)
-    S->>RR: get_by_id(id)
+    S->>RR: get_by_id(id)  %% unlocked, to discover car_id
     alt rental missing
         S-->>API: RentalNotFoundError
         API-->>C: 404
-    else rental.returned_date is not null
-        S-->>API: RentalAlreadyEndedError
-        API-->>C: 409
     else ok
-        S->>RR: rental.returned_date = today()
-        S->>RR: rental.car.status = available
-        S->>DB: COMMIT
-        S->>P: publish("rental.ended", {...})
-        S-->>API: RentalRead
-        API-->>C: 200
+        S->>CR: get_by_id_for_update(car_id)   %% lock CAR first
+        S->>RR: get_by_id_for_update(id)       %% then lock + re-read RENTAL
+        alt rental.returned_date is not null
+            S-->>API: RentalAlreadyEndedError
+            API-->>C: 409
+        else ok
+            S->>RR: rental.returned_date = today() ; update(rental)
+            S->>CR: car.status = available ; update(car)
+            S->>DB: uow.commit()
+            S->>P: publish("rental.ended", {...})
+            S-->>API: Rental
+            API-->>C: 200 RentalRead
+        end
     end
 ```
 

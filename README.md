@@ -3,9 +3,9 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** early build (steps 0–4 of 13). Architecture is designed, the project
-> boots, and the database, repository and DTO layers are in place; business logic,
-> endpoints, metrics and the message queue are added in later steps.
+> **Status:** early build (steps 0–5 of 13). Architecture is designed, the project
+> boots, and the database, repository, DTO and service (business logic) layers are
+> in place; HTTP endpoints, metrics and the message queue are added in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
@@ -125,7 +125,7 @@ poetry run mypy app
 | 2 | DB models, session, Alembic migration *(done)* |
 | 3 | Repository layer *(done)* |
 | 4 | Pydantic DTOs *(done)* |
-| 5 | Service layer (car + rental lifecycle) |
+| 5 | Service layer (car + rental lifecycle) *(done)* |
 | 6 | REST endpoints |
 | 7 | Logging of critical actions |
 | 8 | Prometheus metrics |

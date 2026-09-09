@@ -81,12 +81,25 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "end_date >= start_date", name="ck_rentals_end_after_start"
         ),
+        sa.CheckConstraint(
+            "returned_date IS NULL OR returned_date >= start_date",
+            name="ck_rentals_returned_after_start",
+        ),
     )
     op.create_index("ix_rentals_car_id", "rentals", ["car_id"])
     op.create_index("ix_rentals_returned_date", "rentals", ["returned_date"])
+    op.create_index(
+        "uq_rentals_one_active_per_car",
+        "rentals",
+        ["car_id"],
+        unique=True,
+        sqlite_where=sa.text("returned_date IS NULL"),
+        postgresql_where=sa.text("returned_date IS NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("uq_rentals_one_active_per_car", table_name="rentals")
     op.drop_index("ix_rentals_returned_date", table_name="rentals")
     op.drop_index("ix_rentals_car_id", table_name="rentals")
     op.drop_table("rentals")

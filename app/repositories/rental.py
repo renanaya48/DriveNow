@@ -24,9 +24,13 @@ class RentalRepository(Protocol):
 
     def get_by_id(self, rental_id: int) -> Rental | None: ...
 
+    def get_by_id_for_update(self, rental_id: int) -> Rental | None: ...
+
     def get_active_by_car(self, car_id: int) -> Rental | None: ...
 
     def list_active(self) -> Sequence[Rental]: ...
+
+    def update(self, rental: Rental) -> Rental: ...
 
 
 class SqlAlchemyRentalRepository:
@@ -42,6 +46,21 @@ class SqlAlchemyRentalRepository:
 
     def get_by_id(self, rental_id: int) -> Rental | None:
         return self._session.get(Rental, rental_id)
+
+    def get_by_id_for_update(self, rental_id: int) -> Rental | None:
+        """Fetch a rental with a row lock (``SELECT ... FOR UPDATE`` on
+        PostgreSQL; no-op on SQLite).
+
+        ``populate_existing`` refreshes an identity-map row from this locked
+        read, so validation after the lock sees post-lock state.
+        """
+        stmt = (
+            select(Rental)
+            .where(Rental.id == rental_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return self._session.scalars(stmt).first()
 
     def get_active_by_car(self, car_id: int) -> Rental | None:
         """The open rental for a car (``returned_date IS NULL``), if any."""
@@ -59,3 +78,8 @@ class SqlAlchemyRentalRepository:
             .order_by(Rental.id)
         )
         return self._session.scalars(stmt).all()
+
+    def update(self, rental: Rental) -> Rental:
+        # ``rental`` is already tracked; flush to surface constraint errors now.
+        self._session.flush()
+        return rental
