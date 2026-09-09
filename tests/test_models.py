@@ -1,7 +1,7 @@
 """Schema-contract tests for the ORM models and the initial migration.
 
 These lock down what step 2 produced so steps 3+ can build on it safely.
-Business-logic tests for the service layer come in step 10.
+Business-logic tests for the service layer live in test_services.py.
 """
 
 from __future__ import annotations

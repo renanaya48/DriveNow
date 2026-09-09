@@ -3,10 +3,10 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–9 of 13). The database, repository, DTO,
+> **Status:** build in progress (steps 0–10 of 13). The database, repository, DTO,
 > service, REST API, logging, metrics and message-queue layers are in place and
-> working end to end; Docker polish and README diagrams come in later steps.
-> See [docs/architecture.md](docs/architecture.md).
+> working end to end, with a branch-covered test suite; Docker polish and README
+> diagrams come in later steps. See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
 `feature/vehicle-management-system`.
@@ -216,8 +216,29 @@ unroutable and dropped.
 ## Tests
 
 ```bash
-poetry run pytest
+poetry run pytest                        # full quality gate: all tests + branch coverage, fails under 95%
+poetry run pytest tests/test_api.py --no-cov   # focused run, no coverage gate
 ```
+
+The assignment asks for **≥ 4 unit tests**; the suite has **159** across every
+layer at **99.8% branch-aware coverage** (`pyproject.toml` sets a 95% floor via
+`--cov-fail-under=95`). One file per layer:
+
+| File | Covers |
+|---|---|
+| `test_models.py` | ORM models ↔ `0001` migration (no schema drift) |
+| `test_schemas.py` | Pydantic request/response DTOs |
+| `test_repositories.py` | repository queries (soft-delete filter, active-rental lookups, counts) |
+| `test_services.py` | business rules + transaction rollback + best-effort events |
+| `test_api.py` | HTTP status codes and the `DomainError → 4xx` mapping |
+| `test_logging.py` | one INFO line per action, no PII, WARNING/ERROR paths |
+| `test_metrics.py` | `/metrics` output and the timing middleware |
+| `test_messaging.py` | RabbitMQ publisher (envelope, retry) + consumer (validate/ack/nack, reconnect) |
+| `test_db.py` | session lifecycle and engine connect args |
+| `test_smoke.py` | app wiring + lifespan shutdown |
+
+Tests run entirely offline — in-memory SQLite via SQLAlchemy, no database daemon,
+no broker, no Docker. See [docs/architecture.md](docs/architecture.md#7-testing).
 
 ## Lint / type-check
 
@@ -239,7 +260,7 @@ poetry run mypy app
 | 7 | Logging of critical actions *(done)* |
 | 8 | Prometheus metrics *(done)* |
 | 9 | RabbitMQ publisher + consumer *(done)* |
-| 10 | Unit tests (≥ 4) |
+| 10 | Unit tests (≥ 4) + coverage gate *(done)* |
 | 11 | Docker polish |
 | 12 | README: diagrams, examples, screenshots |
 | 13 | Git: feature branch, PR |

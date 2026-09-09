@@ -41,7 +41,22 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=app --cov-report=term-missing --cov-fail-under=95"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    # one-line Protocol / stub method bodies (``def f(...) -> T: ...``)
+    ":\\s*\\.\\.\\.\\s*$",
+]
 
 [tool.mypy]
 python_version = "3.11"

@@ -408,3 +408,45 @@ application code – more work for no benefit at this shape and scale.
       con["consumer\nvalidate -> log -> ack"]
       svc -->|publish event_type, payload| pub -->|routing_key = event_type| ex --> q --> con
   ```
+
+## 7. Testing
+
+One test file per layer, all offline (no PostgreSQL, no broker, no Docker). The
+assignment asks for ≥ 4 unit tests; the suite has **159** across every layer at
+**99.8% branch-aware coverage**, with a **95% floor** (`--cov-fail-under=95` in
+`pyproject.toml`).
+
+| File | Layer under test | What a failure here means |
+|---|---|---|
+| `test_models.py` | ORM models + the `0001` migration | schema drift: a column / CHECK / index / FK differs between the models and `alembic upgrade head` |
+| `test_schemas.py` | Pydantic DTOs | a request shape the API should accept/reject changed (year range, empty name, `extra="forbid"`, `end_date >= start_date`, explicit `null`) |
+| `test_repositories.py` | `SqlAlchemy*Repository` | a query changed behaviour: soft-delete filtering, `get_active_by_car`, `count_by_status`, ordering |
+| `test_services.py` | `CarService` / `RentalService` | a business rule or the transaction boundary broke: status transitions, one-open-rental, `start_date == today`, rollback-on-error, best-effort events |
+| `test_api.py` | FastAPI routers + `errors.py` | wrong HTTP status / body: the `DomainError → 404/409/422` mapping, `Path(gt=0)`, `204` on delete |
+| `test_logging.py` | logging call sites | a critical action stopped logging, started logging PII, or a rejection stopped being `WARNING` |
+| `test_metrics.py` | `/metrics` + `MetricsMiddleware` | a gauge/counter changed name or label, or the middleware stopped recording exactly one sample per request |
+| `test_messaging.py` | `RabbitMQPublisher` + consumer | envelope format, retry policy, topology declarations, or the "signal prevents reconnect" guarantee regressed |
+| `test_db.py` | `get_db` / `get_engine` | the session stopped being closed, or the sqlite `connect_args` branch changed |
+| `test_smoke.py` | app wiring + lifespan | the app stopped building, or shutdown stopped closing the publisher |
+
+**In-memory SQLite, not the production DB.** `conftest.py` builds a fresh
+`sqlite://` engine per test (`StaticPool` so every session shares the one
+in-memory DB, a `connect` hook turning on `PRAGMA foreign_keys`). Because
+`CarStatus` is mapped `native_enum=False` with a `CHECK`, the *same* models and
+the *same* migration run on SQLite. These are integration tests **of our code
+against a real SQL engine** — they exercise our queries, constraints and
+transaction handling, but they are **not** tests against PostgreSQL and **not** a
+test of real `SELECT … FOR UPDATE` concurrency (that behaviour is designed and
+documented in §2.4, and is a no-op on SQLite).
+
+**Test doubles** (hand-written, no framework): `SpyPublisher` records emitted
+events; `RaisingPublisher` proves a publish failure never breaks the operation;
+`ExplodingOnUpdate` wraps a real repository but throws on `update()` to force the
+rollback path. HTTP tests use `TestClient` with
+`app.dependency_overrides[get_db]` pointed at the in-memory session and cleared
+in a `finally`.
+
+**Not covered by design:** real broker / Docker end-to-end, load and
+concurrency, and a handful of genuinely defensive guards marked
+`# pragma: no cover` (e.g. the rental row disappearing between its discovery
+read and the locked re-read).

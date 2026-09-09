@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
@@ -108,6 +109,18 @@ def test_publish_reuses_the_channel(blocking_connection: mock.MagicMock) -> None
 
     assert blocking_connection.call_count == 1
     assert channel.basic_publish.call_count == 2
+
+
+def test_publish_reconnects_when_the_channel_is_closed(
+    blocking_connection: mock.MagicMock,
+) -> None:
+    publisher = RabbitMQPublisher(_URL)
+    publisher.publish("car.added", {"car_id": 1})
+
+    _channel_of(blocking_connection).is_open = False  # broker closed it under us
+    publisher.publish("car.added", {"car_id": 2})
+
+    assert blocking_connection.call_count == 2
 
 
 def test_publish_retries_once_then_succeeds(
@@ -249,10 +262,31 @@ def test_consumer_drops_envelope_missing_a_required_key() -> None:
     channel.basic_ack.assert_not_called()
 
 
+def test_consumer_drops_non_object_body() -> None:
+    channel = mock.MagicMock()
+
+    consumer._on_message(channel, _delivery(), None, b"42")  # valid JSON, not a dict
+
+    channel.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)
+    channel.basic_ack.assert_not_called()
+
+
 def test_consumer_drops_envelope_with_wrong_field_types() -> None:
     channel = mock.MagicMock()
     body = json.dumps(
         {"id": 17, "event_type": None, "occurred_at": [], "payload": "hi"}
+    ).encode()
+
+    consumer._on_message(channel, _delivery(), None, body)
+
+    channel.basic_nack.assert_called_once_with(delivery_tag=7, requeue=False)
+    channel.basic_ack.assert_not_called()
+
+
+def test_consumer_drops_envelope_with_non_object_payload() -> None:
+    channel = mock.MagicMock()
+    body = json.dumps(
+        {"id": "a", "event_type": "car.added", "occurred_at": "t", "payload": "nope"}
     ).encode()
 
     consumer._on_message(channel, _delivery(), None, body)
@@ -277,3 +311,134 @@ def test_consumer_main_exits_when_queue_disabled(
 
     bc.assert_not_called()
     assert "message queue disabled" in caplog.text
+
+
+# --- consumer: connection + reconnect loop + signals ------------------
+
+
+@pytest.fixture
+def _reset_consumer_state() -> Iterator[None]:
+    """Isolate the module-level ``_shutdown`` event / ``_active_channel``."""
+    consumer._shutdown.clear()
+    consumer._active_channel = None
+    yield
+    consumer._shutdown.clear()
+    consumer._active_channel = None
+
+
+@pytest.mark.usefixtures("_reset_consumer_state")
+def test_consume_once_declares_topology_and_consumes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    with mock.patch("app.messaging.consumer.pika.BlockingConnection") as bc:
+        channel = bc.return_value.channel.return_value
+        consumer._consume_once(_URL)
+
+    channel.exchange_declare.assert_called_once_with(
+        exchange=consumer.EXCHANGE, exchange_type="topic", durable=True
+    )
+    channel.queue_declare.assert_called_once_with(
+        queue=consumer.QUEUE, durable=True
+    )
+    channel.queue_bind.assert_called_once_with(
+        queue=consumer.QUEUE, exchange=consumer.EXCHANGE, routing_key="#"
+    )
+    channel.basic_qos.assert_called_once_with(prefetch_count=10)
+    channel.basic_consume.assert_called_once_with(
+        queue=consumer.QUEUE, on_message_callback=consumer._on_message
+    )
+    channel.start_consuming.assert_called_once()
+    bc.return_value.close.assert_called_once()  # finally: always closes
+    assert f"queue={consumer.QUEUE}" in caplog.text
+
+
+@pytest.mark.usefixtures("_reset_consumer_state")
+def test_main_reconnects_after_a_broker_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        consumer,
+        "get_settings",
+        lambda: SimpleNamespace(enable_message_queue=True, rabbitmq_url="amqp://x"),
+    )
+    monkeypatch.setattr(consumer, "configure_logging", lambda _s: None)
+    monkeypatch.setattr(consumer, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(consumer._shutdown, "wait", lambda _t: None)
+
+    calls: list[int] = []
+
+    def _consume(_url: str) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise pika.exceptions.AMQPConnectionError("down")
+        consumer._shutdown.set()  # 2nd attempt connects; ask the loop to stop
+
+    consume = mock.Mock(side_effect=_consume)
+    monkeypatch.setattr(consumer, "_consume_once", consume)
+
+    caplog.set_level(logging.INFO)
+    consumer.main()
+
+    assert consume.call_count == 2
+    assert "broker connection lost" in caplog.text
+    assert "consumer stopped" in caplog.text
+
+
+@pytest.mark.usefixtures("_reset_consumer_state")
+def test_main_shutdown_during_error_prevents_reconnect(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        consumer,
+        "get_settings",
+        lambda: SimpleNamespace(enable_message_queue=True, rabbitmq_url="amqp://x"),
+    )
+    monkeypatch.setattr(consumer, "configure_logging", lambda _s: None)
+    monkeypatch.setattr(consumer, "_install_signal_handlers", lambda: None)
+
+    def _fail_and_signal(_url: str) -> None:
+        consumer._shutdown.set()  # SIGTERM landed during the attempt
+        raise pika.exceptions.AMQPConnectionError("down")
+
+    consume = mock.Mock(side_effect=_fail_and_signal)
+    monkeypatch.setattr(consumer, "_consume_once", consume)
+
+    caplog.set_level(logging.INFO)
+    consumer.main()
+
+    assert consume.call_count == 1  # no reconnect after shutdown
+    assert "broker connection lost" not in caplog.text
+    assert "consumer stopped" in caplog.text
+
+
+@pytest.mark.usefixtures("_reset_consumer_state")
+def test_handle_signal_sets_shutdown_and_stops_consuming() -> None:
+    channel = mock.MagicMock()
+    consumer._active_channel = channel
+
+    consumer._handle_signal(signal.SIGTERM, None)
+
+    assert consumer._shutdown.is_set()
+    channel.stop_consuming.assert_called_once()
+
+
+@pytest.mark.usefixtures("_reset_consumer_state")
+def test_handle_signal_without_an_active_channel_is_safe() -> None:
+    consumer._handle_signal(signal.SIGINT, None)  # _active_channel is None
+
+    assert consumer._shutdown.is_set()
+
+
+def test_install_signal_handlers_registers_sigterm_and_sigint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered: dict[int, object] = {}
+    monkeypatch.setattr(
+        consumer.signal, "signal", lambda sig, handler: registered.__setitem__(sig, handler)
+    )
+
+    consumer._install_signal_handlers()
+
+    assert registered[signal.SIGTERM] is consumer._handle_signal
+    assert registered[signal.SIGINT] is consumer._handle_signal

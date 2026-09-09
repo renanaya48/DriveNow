@@ -6,6 +6,7 @@ fixture; a ``SpyPublisher`` records emitted events.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any
@@ -232,6 +233,26 @@ def test_delete_car_missing(db_session: Session) -> None:
         _car_service(db_session).delete_car(999)
 
 
+def test_add_car_survives_publisher_failure(
+    db_session: Session, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raising publisher is swallowed: the car commits, one ERROR is logged."""
+    caplog.set_level(logging.INFO)
+    car = _car_service(db_session, RaisingPublisher()).add_car(
+        CarCreate(model="Yaris", year=2023)
+    )
+
+    assert SqlAlchemyCarRepository(db_session).get_by_id(car.id) is not None
+    errors = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "failed to publish car.added" and r.levelno >= logging.ERROR
+    ]
+    assert len(errors) == 1
+    assert errors[0].name == "app.services.car_service"
+    assert errors[0].exc_info is not None  # ERROR carries the traceback
+
+
 # --- RentalService -------------------------------------------------------
 
 
@@ -332,6 +353,23 @@ def test_end_rental_already_ended(db_session: Session) -> None:
 def test_end_rental_missing(db_session: Session) -> None:
     with pytest.raises(RentalNotFoundError):
         _rental_service(db_session).end_rental(999)
+
+
+def test_end_rental_when_car_row_is_gone_is_domain_error(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defensive guard: an active rental exists but its car row can't be locked."""
+    car = _seed_car(db_session, status=CarStatus.IN_USE)
+    rental = SqlAlchemyRentalRepository(db_session).add(
+        Rental(car_id=car.id, customer_name="X", start_date=TODAY, end_date=NEXT_WEEK)
+    )
+    db_session.commit()
+
+    cars = SqlAlchemyCarRepository(db_session)
+    monkeypatch.setattr(cars, "get_by_id_for_update", lambda _car_id: None)
+
+    with pytest.raises(CarNotFoundError):
+        _rental_service(db_session, cars=cars).end_rental(rental.id)
 
 
 def test_end_rental_before_start_date(db_session: Session) -> None:
