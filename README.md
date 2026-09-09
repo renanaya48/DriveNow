@@ -10,8 +10,7 @@ rentals. Built as a clean, layered foundation for future expansion.
 > Docker Compose stack, and CI. Architecture and trade-offs:
 > [docs/architecture.md](docs/architecture.md).
 
-**Repository:** https://github.com/renanaya48/DriveNow — work on branch
-`feature/vehicle-management-system`.
+**Repository:** https://github.com/renanaya48/DriveNow
 
 *Short on time? Read [Highlights](#highlights) →
 [Architecture at a glance](#architecture-at-a-glance) → [Quickstart](#quickstart)
