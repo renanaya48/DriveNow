@@ -2,7 +2,7 @@
 name = "drivenow"
 version = "0.1.0"
 description = "DriveNow - Vehicle Management System for a car rental company"
-authors = [{ name = "alon4606", email = "alon4606@gmail.com" }]
+authors = [{ name = "Renana Eichenwald", email = "renanaya48@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 dependencies = [
@@ -41,7 +41,22 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=app --cov-report=term-missing --cov-fail-under=95"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    # one-line Protocol / stub method bodies (``def f(...) -> T: ...``)
+    ":\\s*\\.\\.\\.\\s*$",
+]
 
 [tool.mypy]
 python_version = "3.11"

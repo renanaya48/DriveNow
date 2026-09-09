@@ -16,12 +16,15 @@ from app.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: `alembic upgrade` runs in-process (Docker
+    # entrypoint, tests) and the default (True) would switch off the app's own
+    # loggers for the rest of the process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# Inject the real URL (escaping % for ConfigParser).
-config.set_main_option(
-    "sqlalchemy.url", get_settings().database_url.replace("%", "%%")
-)
+# Resolve the DB URL: an explicit value on the config wins (tests / `alembic -x`),
+# otherwise fall back to application settings. Escape % for ConfigParser.
+_url = config.get_main_option("sqlalchemy.url") or get_settings().database_url
+config.set_main_option("sqlalchemy.url", _url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

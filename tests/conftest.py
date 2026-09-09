@@ -1,7 +1,57 @@
 """Shared pytest fixtures.
 
-Populated in step 10: an in-memory SQLite engine, a clean Session per test, a
-NullPublisher, and a FastAPI TestClient with dependency overrides.
+An in-memory SQLite engine with a clean schema per test and a Session bound to
+it. Repository, service and API tests build on these (the API tests override the
+FastAPI ``get_db`` dependency with ``db_session``).
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterator
+
+import pytest
+from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.models import Base
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    """Fresh in-memory SQLite DB with the full schema, torn down after the test.
+
+    ``StaticPool`` keeps a single connection so every session sees the same
+    in-memory database. A ``connect`` hook turns on FK enforcement, which SQLite
+    leaves off by default.
+    """
+    eng = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    @event.listens_for(eng, "connect")
+    def _enable_sqlite_fks(dbapi_connection: object, _record: object) -> None:
+        cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    Base.metadata.create_all(eng)
+    try:
+        yield eng
+    finally:
+        Base.metadata.drop_all(eng)
+        eng.dispose()
+
+
+@pytest.fixture
+def db_session(engine: Engine) -> Iterator[Session]:
+    """A Session bound to the per-test engine; rolled back and closed after."""
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()

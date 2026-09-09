@@ -24,5 +24,17 @@ class CarNotAvailableError(DomainError):
     """Car cannot be rented because it is not in the 'available' state."""
 
 
+class CarStatusTransitionError(DomainError):
+    """Requested status change is not a legal transition via update."""
+
+
+class CarHasActiveRentalError(DomainError):
+    """Car cannot be removed while it has an active rental."""
+
+
 class RentalAlreadyEndedError(DomainError):
     """Rental has already been ended and cannot be ended again."""
+
+
+class RentalDateError(DomainError):
+    """Rental dates violate a business rule (e.g. not starting today)."""
