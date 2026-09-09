@@ -1,12 +1,15 @@
 # DriveNow – Vehicle Management System
 
+[![CI](https://github.com/renanaya48/DriveNow/actions/workflows/ci.yml/badge.svg)](https://github.com/renanaya48/DriveNow/actions/workflows/ci.yml)
+
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–10 of 13). The database, repository, DTO,
+> **Status:** build in progress (steps 0–11 of 13). The database, repository, DTO,
 > service, REST API, logging, metrics and message-queue layers are in place and
-> working end to end, with a branch-covered test suite; Docker polish and README
-> diagrams come in later steps. See [docs/architecture.md](docs/architecture.md).
+> working end to end, with a branch-covered test suite and a one-command Docker
+> stack (API + Postgres + RabbitMQ + Prometheus + Grafana); README diagrams are
+> the last polish step. See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
 `feature/vehicle-management-system`.
@@ -20,8 +23,10 @@ rentals. Built as a clean, layered foundation for future expansion.
 | Metrics | prometheus-client (`/metrics`) |
 | Message queue | RabbitMQ (pika) |
 | Dependency management | Poetry |
-| Tests | pytest |
+| Tests | pytest (branch coverage, 95% gate) |
 | Packaging | Docker + docker-compose |
+| Observability | Prometheus + Grafana (provisioned) |
+| CI | GitHub Actions (ruff · mypy · pytest · docker build) |
 
 Why PostgreSQL: the data is relational (`rentals.car_id` → `cars`), rental
 registration needs an atomic "create rental + flip car status" transaction, and
@@ -84,10 +89,25 @@ poetry run uvicorn app.main:app --reload --port 8000
 docker compose up --build
 ```
 
-Starts `db` (PostgreSQL), `rabbitmq` (management UI on :15672, login
-**drivenow / drivenow**), `api` on :8000, and the `consumer` worker. The `api`
-container runs `alembic upgrade head` on start (see `docker/entrypoint.sh`)
-before Uvicorn; the `consumer` skips migrations (it needs no DB).
+Six services on one network:
+
+| Service | Port | What it is |
+|---|---|---|
+| `api` | http://localhost:8000 ([/docs](http://localhost:8000/docs)) | the FastAPI app |
+| `grafana` | http://localhost:3000 | **DriveNow** dashboard (login `drivenow` / `drivenow`, or anonymous read-only) |
+| `prometheus` | http://localhost:9090 | scrapes `api:8000/metrics` every 15s |
+| `rabbitmq` | http://localhost:15672 | management UI (`drivenow` / `drivenow`) |
+| `db` | 5432 | PostgreSQL |
+| `consumer` | — | event-logging worker (`docker compose logs -f consumer`) |
+
+The `api` container runs `alembic upgrade head` on start (see
+`docker/entrypoint.sh`) before Uvicorn; the `consumer` skips migrations (no DB).
+The image runs as a non-root user and carries a `/health` `HEALTHCHECK`. `api`
+waits only for `db` to be healthy — **RabbitMQ being down does not stop the API**
+(publishing is best-effort; the consumer reconnects when the broker returns).
+
+> Published ports, the `drivenow`/`drivenow` credentials and Grafana's anonymous
+> view are a local-demo convenience, not a production security posture.
 
 ## Database & migrations
 
@@ -172,8 +192,8 @@ carry IDs and dates, never customer names.
 | `drivenow_operations_total{operation,outcome}` | requests by route template and HTTP status class (e.g. `2xx`/`4xx`/`5xx`) |
 
 The gauges are recomputed from the DB on every scrape. `/metrics`, `/health` and
-the docs routes are not timed. (A `prometheus` service for `docker compose` comes
-with the Docker polish step.)
+the docs routes are not timed. `docker compose` wires these into **Prometheus**
+(:9090) and a provisioned **Grafana** dashboard (:3000).
 
 ## Message queue
 
@@ -261,6 +281,6 @@ poetry run mypy app
 | 8 | Prometheus metrics *(done)* |
 | 9 | RabbitMQ publisher + consumer *(done)* |
 | 10 | Unit tests (≥ 4) + coverage gate *(done)* |
-| 11 | Docker polish |
+| 11 | Docker polish: non-root image, Prometheus + Grafana, CI *(done)* |
 | 12 | README: diagrams, examples, screenshots |
 | 13 | Git: feature branch, PR |

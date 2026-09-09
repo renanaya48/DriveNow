@@ -1,3 +1,13 @@
+# Local development / demo stack. Published ports, the drivenow/drivenow
+# credentials and Grafana's anonymous view are a convenience here, not a
+# production security posture.
+
+x-app-env: &app-env
+  APP_ENV: docker
+  RABBITMQ_URL: amqp://drivenow:drivenow@rabbitmq:5672/
+  ENABLE_MESSAGE_QUEUE: "true"
+  LOG_LEVEL: INFO
+
 services:
   db:
     image: postgres:16-alpine
@@ -14,6 +24,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -30,27 +41,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   api:
     build:
       context: .
       target: runtime
+    # Depends on the DB only. RabbitMQ is best-effort (see docs section 6/9):
+    # if the broker is down the API still starts and serves requests; each
+    # publish just fails best-effort and the consumer reconnects later.
     depends_on:
       db:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     environment:
-      APP_ENV: docker
+      <<: *app-env
       DATABASE_URL: postgresql+psycopg://drivenow:drivenow@db:5432/drivenow
-      RABBITMQ_URL: amqp://drivenow:drivenow@rabbitmq:5672/
-      ENABLE_MESSAGE_QUEUE: "true"
-      LOG_LEVEL: INFO
       LOG_FILE: logs/app.log
     ports:
       - "8000:8000"
     volumes:
-      - ./logs:/app/logs
+      - api_logs:/app/logs
+    restart: unless-stopped
 
   consumer:
     build:
@@ -60,16 +71,49 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      APP_ENV: docker
-      RABBITMQ_URL: amqp://drivenow:drivenow@rabbitmq:5672/
-      ENABLE_MESSAGE_QUEUE: "true"
-      LOG_LEVEL: INFO
+      <<: *app-env
     # Bypass the image's "alembic upgrade head" entrypoint: the log-only
     # consumer needs no database. `command: []` stops the image's uvicorn CMD
     # being passed through as stray args to the new entrypoint.
     entrypoint: ["python", "-m", "app.messaging.consumer"]
     command: []
+    # Same image as `api`, but no HTTP server - the inherited HEALTHCHECK would
+    # mark it unhealthy forever.
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: drivenow
+      GF_SECURITY_ADMIN_PASSWORD: drivenow
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
     restart: unless-stopped
 
 volumes:
   db_data:
+  api_logs:
+  prom_data:
+  grafana_data:

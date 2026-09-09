@@ -1,5 +1,8 @@
 .git
 .gitignore
+.gitattributes
+.github
+.claude
 .venv
 venv
 __pycache__
@@ -9,6 +12,8 @@ __pycache__
 .ruff_cache
 .coverage
 htmlcov
+*.db
+*.db-journal
 .env
 logs/*.log
 docs

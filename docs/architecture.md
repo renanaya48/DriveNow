@@ -450,3 +450,61 @@ in a `finally`.
 concurrency, and a handful of genuinely defensive guards marked
 `# pragma: no cover` (e.g. the rental row disappearing between its discovery
 read and the locked re-read).
+
+**CI** (`.github/workflows/ci.yml`) runs the same three commands on every push
+plus a `docker build --target runtime` and a `docker compose config` — the only
+place the container build is actually exercised.
+
+## 8. Running in Docker
+
+### 8.1 Image
+
+A 3-stage `Dockerfile` (`base` → `builder` → `runtime`). The `builder`
+`poetry export`s the locked runtime deps and `pip install`s them into an
+isolated virtualenv `/opt/venv`; `runtime` copies **only** that venv plus
+`app/`, `alembic/` and the entrypoint — Poetry and the export plugin never reach
+the final image. It runs as a non-root user (`appuser`, uid 1000) and carries a
+stdlib `HEALTHCHECK` against `/health`.
+
+`docker/entrypoint.sh` (the `api` service only) runs `alembic upgrade head` once,
+then `exec`s the CMD (`uvicorn`). This is fine for a single instance / local
+Compose; a multi-replica deployment would run migrations as a separate
+job/step so parallel containers don't race the same upgrade.
+
+### 8.2 Compose topology
+
+```mermaid
+flowchart LR
+    subgraph obs["observability"]
+        prom["prometheus\n:9090"]
+        graf["grafana\n:3000"]
+    end
+    api["api\n:8000"]
+    db[("db\npostgres :5432")]
+    mq{{"rabbitmq\n:5672 / :15672"}}
+    con["consumer"]
+
+    api --> db
+    api -. best-effort .-> mq
+    con --> mq
+    prom -- "scrape /metrics 15s" --> api
+    graf -- "query" --> prom
+```
+
+- **`api` depends on `db` health only.** Postgres is core — no DB, nothing to
+  serve. RabbitMQ is **not** a startup dependency: the broker being down must not
+  stop the API (§6/§9 — publishing is best-effort, the `RabbitMQPublisher`
+  connects lazily, the `consumer` reconnects with backoff).
+- **`consumer`** shares the image but overrides the entrypoint
+  (`python -m app.messaging.consumer`) and disables the inherited healthcheck (no
+  HTTP server); it *does* wait for `rabbitmq` to be healthy.
+- **`prometheus`** scrapes `api:8000/metrics` every 15s
+  (`docker/prometheus.yml`). **`grafana`** auto-provisions the Prometheus
+  datasource and the **DriveNow** dashboard from `docker/grafana/` — fleet by
+  status, ongoing rentals, request rate, outcome mix, p95 latency, all built on
+  the §6 metrics.
+- Persistent named volumes: `db_data`, `api_logs`, `prom_data`, `grafana_data`.
+
+Published ports, the `drivenow`/`drivenow` credentials and Grafana's anonymous
+`Viewer` access are a local-demo convenience — **not** a production security
+posture.
