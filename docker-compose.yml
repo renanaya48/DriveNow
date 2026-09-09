@@ -17,6 +17,11 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    environment:
+      # The built-in "guest" account is refused for non-localhost connections,
+      # so containers need a real user.
+      RABBITMQ_DEFAULT_USER: drivenow
+      RABBITMQ_DEFAULT_PASS: drivenow
     ports:
       - "5672:5672"    # AMQP
       - "15672:15672"  # management UI
@@ -38,7 +43,7 @@ services:
     environment:
       APP_ENV: docker
       DATABASE_URL: postgresql+psycopg://drivenow:drivenow@db:5432/drivenow
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://drivenow:drivenow@rabbitmq:5672/
       ENABLE_MESSAGE_QUEUE: "true"
       LOG_LEVEL: INFO
       LOG_FILE: logs/app.log
@@ -56,11 +61,15 @@ services:
         condition: service_healthy
     environment:
       APP_ENV: docker
-      DATABASE_URL: postgresql+psycopg://drivenow:drivenow@db:5432/drivenow
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_URL: amqp://drivenow:drivenow@rabbitmq:5672/
       ENABLE_MESSAGE_QUEUE: "true"
       LOG_LEVEL: INFO
-    command: ["python", "-m", "app.messaging.consumer"]
+    # Bypass the image's "alembic upgrade head" entrypoint: the log-only
+    # consumer needs no database. `command: []` stops the image's uvicorn CMD
+    # being passed through as stray args to the new entrypoint.
+    entrypoint: ["python", "-m", "app.messaging.consumer"]
+    command: []
+    restart: unless-stopped
 
 volumes:
   db_data:

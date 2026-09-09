@@ -3,9 +3,9 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** build in progress (steps 0–8 of 13). The database, repository, DTO,
-> service, REST API, logging and metrics layers are in place and working end to
-> end; the message queue and Docker polish are added in later steps.
+> **Status:** build in progress (steps 0–9 of 13). The database, repository, DTO,
+> service, REST API, logging, metrics and message-queue layers are in place and
+> working end to end; Docker polish and README diagrams come in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
@@ -84,9 +84,10 @@ poetry run uvicorn app.main:app --reload --port 8000
 docker compose up --build
 ```
 
-Starts `db` (PostgreSQL), `rabbitmq` (with management UI on :15672), `api` on
-:8000, and the `consumer` worker. The `api` container runs `alembic upgrade head`
-on start (see `docker/entrypoint.sh`) before Uvicorn.
+Starts `db` (PostgreSQL), `rabbitmq` (management UI on :15672, login
+**drivenow / drivenow**), `api` on :8000, and the `consumer` worker. The `api`
+container runs `alembic upgrade head` on start (see `docker/entrypoint.sh`)
+before Uvicorn; the `consumer` skips migrations (it needs no DB).
 
 ## Database & migrations
 
@@ -174,6 +175,44 @@ The gauges are recomputed from the DB on every scrape. `/metrics`, `/health` and
 the docs routes are not timed. (A `prometheus` service for `docker compose` comes
 with the Docker polish step.)
 
+## Message queue
+
+The service layer emits a domain event after each successful action, through the
+`EventPublisher` abstraction (`app/messaging/`):
+
+| Event | Payload |
+|---|---|
+| `car.added` / `car.deleted` | `{"car_id": int}` |
+| `car.updated` | `{"car_id": int, "changed": [field, …]}` |
+| `rental.started` / `rental.ended` | `{"rental_id": int, "car_id": int}` |
+
+- **`ENABLE_MESSAGE_QUEUE`** (default `false`) selects the implementation:
+  `false` → `NullPublisher` (events dropped, no broker needed — this is what the
+  tests and a bare `uvicorn` run use); `true` → `RabbitMQPublisher`, which
+  publishes to the durable topic exchange `drivenow.events` at **`RABBITMQ_URL`**.
+- Publishing is **best-effort**: it runs after the DB commit, with bounded
+  timeouts and one reconnect-retry; a failure is logged (`ERROR`) and the HTTP
+  request still succeeds. Guaranteed delivery would need a transactional outbox
+  (see [docs/architecture.md](docs/architecture.md#6-cross-cutting-concerns)).
+- The **consumer** (`python -m app.messaging.consumer`) binds a durable queue
+  `drivenow.event_logger` to every event and logs one line per message.
+
+Watch it end to end:
+
+```bash
+docker compose up --build
+docker compose logs -f consumer     # wait for "consumer ready: … queue=drivenow.event_logger"
+
+curl -sX POST http://localhost:8000/cars -H 'content-type: application/json' \
+  -d '{"model": "Toyota Corolla", "year": 2023}'
+# consumer log: event received event_type=car.added id=… payload={'car_id': 1}
+```
+
+The RabbitMQ management UI (`http://localhost:15672`, **drivenow / drivenow**)
+shows the `drivenow.events` exchange and the `drivenow.event_logger` queue. Start
+the consumer before generating events — an event published with no queue bound is
+unroutable and dropped.
+
 ## Tests
 
 ```bash
@@ -199,7 +238,7 @@ poetry run mypy app
 | 6 | REST endpoints *(done)* |
 | 7 | Logging of critical actions *(done)* |
 | 8 | Prometheus metrics *(done)* |
-| 9 | RabbitMQ publisher + consumer |
+| 9 | RabbitMQ publisher + consumer *(done)* |
 | 10 | Unit tests (≥ 4) |
 | 11 | Docker polish |
 | 12 | README: diagrams, examples, screenshots |

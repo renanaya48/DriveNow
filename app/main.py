@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import cars, health, metrics, rentals
+from app.api.deps import get_event_publisher
 from app.api.errors import register_exception_handlers
 from app.api.middleware import MetricsMiddleware
 from app.core import metrics as _metrics  # noqa: F401  (import registers Prometheus metrics)
@@ -21,9 +22,15 @@ from app.core.logging import configure_logging
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Run startup/shutdown hooks. DB and message-queue wiring is added later."""
+    """Run startup / shutdown hooks."""
     configure_logging(get_settings())
-    yield
+    try:
+        yield
+    finally:
+        publisher = get_event_publisher()
+        close = getattr(publisher, "close", None)
+        if callable(close):
+            close()  # RabbitMQPublisher: drop the shared connection cleanly
 
 
 def create_app() -> FastAPI:

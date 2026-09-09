@@ -189,8 +189,8 @@ same-value or empty update is a no-op — no write, no event.
 **`register_rental` starts a rental today** — not a reservation system, not
 historical import: `dto.start_date` must equal today.
 
-**Domain events** (minimal payloads; the publisher adds id/timestamp envelope
-metadata in step 9):
+**Domain events** (minimal payloads; the publisher wraps each one in an
+id/timestamp envelope — see section 6):
 
 | Event | Payload |
 |---|---|
@@ -352,3 +352,59 @@ application code – more work for no benefit at this shape and scale.
   `/openapi.json`, `/redoc`.
 - **Messaging** (`app/messaging/`): domain events published best-effort after a
   successful commit; a failure to publish is logged, never fatal to the request.
+
+  **Publisher.** The service layer depends only on the `EventPublisher`
+  protocol. `app/api/deps.py::get_event_publisher` (cached, one per process)
+  returns `RabbitMQPublisher` when `ENABLE_MESSAGE_QUEUE` is true, else
+  `NullPublisher` — so the app runs with no broker by default and every test
+  injects its own publisher.
+
+  `RabbitMQPublisher` (blocking `pika`) publishes to a **durable topic
+  exchange** `drivenow.events`, routing key = the event type. Each event is
+  wrapped in a JSON envelope
+  `{"id": <uuid>, "event_type": <str>, "occurred_at": <ISO-8601 UTC>, "payload": <dict>}`
+  and sent persistent (`delivery_mode=2`), `mandatory=True`, with
+  `confirm_delivery()` — an unroutable or unconfirmed publish raises. One
+  lazily-opened connection is reused across requests, guarded by a
+  `threading.Lock` (the routers are sync `def`, so FastAPI runs them in a
+  threadpool and blocking `pika` + a lock are the right primitives).
+  Timeouts are bounded (`socket_timeout` / `blocked_connection_timeout` ≈ 3s,
+  `connection_attempts=1`) so an unavailable broker fails the publish in ~3s
+  instead of stalling the request. On a connection-level error
+  (`AMQPConnectionError`, `StreamLostError`, `ChannelWrongStateError`, `OSError`)
+  it resets and retries **once**; semantic/topology failures
+  (`ChannelClosedByBroker`), `UnroutableError` / `NackError` and serialization
+  errors are **not** retried — a reconnect would not fix them. Either way the
+  exception surfaces to `CarService._publish`, which logs `ERROR` and lets the
+  HTTP response succeed.
+
+  **Consumer** (`python -m app.messaging.consumer`, its own process /
+  compose service). Declares the same exchange and a **durable queue**
+  `drivenow.event_logger` bound with `#` (all events), `prefetch_count=10`. Per
+  message: validate the envelope → one INFO line
+  (`event received event_type=… id=… payload=…`) → `basic_ack`. A malformed
+  body is logged and dropped with `basic_nack(requeue=False)` — a poison
+  message must not loop. SIGTERM/SIGINT set a `threading.Event` and call
+  `stop_consuming()`; a broker outage reconnects after a 5s backoff unless
+  shutdown was requested during it.
+
+  **Payload contract.** Event payloads carry only **operational IDs / non-PII
+  fields** (`car_id`, `rental_id`, `changed`) — the logging consumer records the
+  payload, so `customer_name` and similar never go on the wire.
+
+  **Known limitations.** Delivery is best-effort: an event published before the
+  consumer has declared its queue is unroutable and dropped, and a publish that
+  fails after the DB commit is lost. Guaranteed at-least-once delivery would need
+  the **transactional outbox** pattern (write the event to an `outbox` table in
+  the same transaction, relay it asynchronously) — deliberately out of scope
+  here.
+
+  ```mermaid
+  flowchart LR
+      svc["CarService / RentalService\n(after commit, best-effort)"]
+      pub["RabbitMQPublisher\nenvelope + confirm"]
+      ex{{"exchange drivenow.events\n(topic, durable)"}}
+      q["queue drivenow.event_logger\n(durable, bind #)"]
+      con["consumer\nvalidate -> log -> ack"]
+      svc -->|publish event_type, payload| pub -->|routing_key = event_type| ex --> q --> con
+  ```

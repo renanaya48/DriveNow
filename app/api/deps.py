@@ -8,14 +8,17 @@ plain Python.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.unit_of_work import SqlAlchemyUnitOfWork
 from app.messaging.publisher import EventPublisher, NullPublisher
+from app.messaging.rabbitmq import RabbitMQPublisher
 from app.repositories.car import SqlAlchemyCarRepository
 from app.repositories.rental import SqlAlchemyRentalRepository
 from app.services import CarService, RentalService
@@ -23,8 +26,17 @@ from app.services import CarService, RentalService
 __all__ = ["get_car_service", "get_db", "get_event_publisher", "get_rental_service"]
 
 
+@lru_cache
 def get_event_publisher() -> EventPublisher:
-    """The no-op publisher. Step 9 swaps in the RabbitMQ implementation here."""
+    """One publisher per process: ``RabbitMQPublisher`` when the message queue is
+    enabled, else the no-op ``NullPublisher``.
+
+    Cached so the RabbitMQ connection (opened lazily on the first publish) is
+    shared across requests; tests reset it with ``cache_clear()``.
+    """
+    settings = get_settings()
+    if settings.enable_message_queue:
+        return RabbitMQPublisher(settings.rabbitmq_url)
     return NullPublisher()
 
 

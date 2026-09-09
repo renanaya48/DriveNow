@@ -1,8 +1,10 @@
 """Domain-event publishing abstraction.
 
 The service layer depends only on the ``EventPublisher`` protocol (Dependency
-Inversion). ``NullPublisher`` is the default in the skeleton and in tests;
-``RabbitMQPublisher`` is added in step 9 and is a drop-in replacement.
+Inversion). ``NullPublisher`` is the default (message queue disabled) and the
+one used in tests; :class:`app.messaging.rabbitmq.RabbitMQPublisher` is the
+drop-in replacement when ``ENABLE_MESSAGE_QUEUE`` is true. The choice is made in
+:func:`app.api.deps.get_event_publisher`.
 """
 
 from __future__ import annotations
@@ -15,8 +17,13 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class EventPublisher(Protocol):
-    """Publish a single domain event. Implementations must not raise on failure
-    in a way that breaks the caller's request; publishing is best-effort."""
+    """Publish a single domain event.
+
+    Implementations may raise on transport failure. The *best-effort* policy
+    lives in the service layer, not here: ``CarService`` / ``RentalService``
+    call this from ``_publish``, which catches any exception so a dropped event
+    never fails the business operation.
+    """
 
     def publish(self, event_type: str, payload: dict[str, Any]) -> None: ...
 
