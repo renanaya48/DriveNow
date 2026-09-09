@@ -53,12 +53,10 @@ DB constraints keep invalid data out. Full rationale in
 ## Quickstart
 
 ```bash
-git clone --branch feature/vehicle-management-system https://github.com/renanaya48/DriveNow.git
+git clone https://github.com/renanaya48/DriveNow.git
 cd DriveNow
 docker compose up --build
 ```
-
-*(Once the branch is merged in step 13, `--branch …` is no longer needed.)*
 
 Open [Swagger](http://localhost:8000/docs) and [Grafana](http://localhost:3000).
 Run the demo flow in [Using the API](#using-the-api) to add a car, start/end a
