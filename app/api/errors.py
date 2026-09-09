@@ -12,10 +12,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.services.exceptions import (
+    CarHasActiveRentalError,
     CarNotAvailableError,
     CarNotFoundError,
+    CarStatusTransitionError,
     DomainError,
     RentalAlreadyEndedError,
+    RentalDateError,
     RentalNotFoundError,
 )
 
@@ -25,7 +28,10 @@ _STATUS_MAP: dict[type[DomainError], int] = {
     CarNotFoundError: 404,
     RentalNotFoundError: 404,
     CarNotAvailableError: 409,
+    CarStatusTransitionError: 409,
+    CarHasActiveRentalError: 409,
     RentalAlreadyEndedError: 409,
+    RentalDateError: 422,
 }
 
 

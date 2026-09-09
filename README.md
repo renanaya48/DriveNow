@@ -3,9 +3,9 @@
 Internal service for a car rental company to manage a fleet of vehicles and their
 rentals. Built as a clean, layered foundation for future expansion.
 
-> **Status:** early build (steps 0–5 of 13). Architecture is designed, the project
-> boots, and the database, repository, DTO and service (business logic) layers are
-> in place; HTTP endpoints, metrics and the message queue are added in later steps.
+> **Status:** build in progress (steps 0–6 of 13). The database, repository, DTO,
+> service and REST API layers are in place and working end to end; logging,
+> metrics and the message queue are added in later steps.
 > See [docs/architecture.md](docs/architecture.md).
 
 **Repository:** https://github.com/renanaya48/DriveNow — active work on branch
@@ -74,9 +74,9 @@ poetry run uvicorn app.main:app --reload --port 8000
 - Health: http://localhost:8000/health
 - Metrics: http://localhost:8000/metrics
 
-> For a real DB, start one with `docker compose up -d db`, then
-> `poetry run alembic upgrade head`. No request path queries the DB yet (no
-> endpoints until step 6), so the app still boots without one.
+> The API needs a database. Point `DATABASE_URL` at one (`docker compose up -d db`,
+> or a local file: `export DATABASE_URL=sqlite:///./dev.db`), then
+> `poetry run alembic upgrade head`.
 
 ### Docker
 
@@ -104,6 +104,46 @@ Tables: `cars`, `rentals` (see [docs/architecture.md](docs/architecture.md#schem
 Models live in `app/models/`; a DB session is obtained via the `get_db` FastAPI
 dependency (`app/core/db.py`).
 
+## Using the API
+
+Interactive docs (Swagger UI) at `http://localhost:8000/docs` once the server is
+up. All six operations:
+
+```bash
+BASE=http://localhost:8000
+TODAY=$(date +%F)
+NEXT_WEEK=$(date -d '+7 days' +%F)   # macOS: date -v+7d +%F
+
+# Add a car
+curl -sX POST $BASE/cars -H 'content-type: application/json' \
+  -d '{"model": "Toyota Corolla", "year": 2023}'
+# -> 201 {"id":1,"model":"Toyota Corolla","year":2023,"status":"available", ...}
+
+# List cars (optional ?status=available|in_use|under_maintenance)
+curl -s $BASE/cars
+curl -s "$BASE/cars?status=available"
+
+# Update a car (partial; e.g. send it for maintenance)
+curl -sX PATCH $BASE/cars/1 -H 'content-type: application/json' \
+  -d '{"status": "under_maintenance"}'
+
+# Register a rental (start_date must be today)
+curl -sX POST $BASE/rentals -H 'content-type: application/json' \
+  -d "{\"car_id\": 1, \"customer_name\": \"Dana\", \"start_date\": \"$TODAY\", \"end_date\": \"$NEXT_WEEK\"}"
+# -> 201 {"id":1,"car_id":1,"returned_date":null,"is_active":true, ...}   (car is now in_use)
+
+# End the rental (frees the car)
+curl -sX POST $BASE/rentals/1/end
+# -> 200 {"id":1,"returned_date":"<today>","is_active":false, ...}        (car is available again)
+
+# Retire a car (soft delete; blocked while it has an active rental)
+curl -isX DELETE $BASE/cars/1        # -> 204 No Content
+```
+
+Errors carry `{"detail": "<message>"}`: `404` unknown car/rental, `409` state
+conflict (car not available, illegal status change, car has an active rental,
+rental already ended), `422` invalid input or a broken date rule.
+
 ## Tests
 
 ```bash
@@ -126,7 +166,7 @@ poetry run mypy app
 | 3 | Repository layer *(done)* |
 | 4 | Pydantic DTOs *(done)* |
 | 5 | Service layer (car + rental lifecycle) *(done)* |
-| 6 | REST endpoints |
+| 6 | REST endpoints *(done)* |
 | 7 | Logging of critical actions |
 | 8 | Prometheus metrics |
 | 9 | RabbitMQ publisher + consumer |

@@ -1,8 +1,8 @@
 """Shared pytest fixtures.
 
 An in-memory SQLite engine with a clean schema per test and a Session bound to
-it. Step 10 (service-layer tests) builds on these - e.g. by overriding the
-FastAPI ``get_db`` dependency with ``db_session``.
+it. Repository, service and API tests build on these (the API tests override the
+FastAPI ``get_db`` dependency with ``db_session``).
 """
 
 from __future__ import annotations

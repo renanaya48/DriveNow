@@ -97,7 +97,7 @@ removing a car must never touch its rentals.
 SQLAlchemy implementation (same shape as `EventPublisher` / `NullPublisher`):
 
 - `CarRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `list(status=None)`, `update`, `soft_delete`
-- `RentalRepository`: `add`, `get_by_id`, `get_active_by_car`, `list_active`
+- `RentalRepository`: `add`, `get_by_id`, `get_by_id_for_update`, `get_active_by_car`, `list_active`, `update`
 
 Rules:
 
@@ -197,6 +197,30 @@ metadata in step 9):
 | `car.added` / `car.deleted` | `{"car_id": int}` |
 | `car.updated` | `{"car_id": int, "changed": [field, …]}` |
 | `rental.started` / `rental.ended` | `{"rental_id": int, "car_id": int}` |
+
+### 2.5 API layer
+
+`app/api/` — FastAPI routers, one per aggregate. Each route is
+`result = service.<method>(dto | id)` → `return <Read>.model_validate(result)`;
+**no business logic in a route**. The service is injected via
+`Annotated[Service, Depends(get_*_service)]` — `app/api/deps.py` is the only place
+`Depends` appears and the only composition root (one `Session` shared by the Unit
+of Work + both repositories).
+
+| Method | Path | Service call | Success |
+|---|---|---|---|
+| POST | `/cars` | `add_car` | `201` `CarRead` |
+| GET | `/cars?status=` | `list_cars` | `200` `CarRead[]` |
+| PATCH | `/cars/{id}` | `update_car` | `200` `CarRead` |
+| DELETE | `/cars/{id}` | `delete_car` | `204` |
+| POST | `/rentals` | `register_rental` | `201` `RentalRead` |
+| POST | `/rentals/{id}/end` | `end_rental` | `200` `RentalRead` |
+
+Path IDs are `Annotated[int, Path(gt=0)]` → `/cars/0` is a `422` at the edge.
+`DomainError → HTTP` is mapped once, in `app/api/errors.py`
+(`404` not-found · `409` state conflict · `422` `RentalDateError`), body
+`{"detail": "<message>"}`. Pydantic request-validation failures use FastAPI's
+default `422` (`{"detail": [ … ]}`).
 
 ## 3. Key flows
 
